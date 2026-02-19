@@ -292,19 +292,22 @@ def _render_excerpts(excerpts):
 
 
 def _render_issues(issues):
-    """Render a list of issues_presented dicts as HTML."""
+    """Render a list of issues_presented items as HTML. Items may be dicts or plain strings."""
     parts = []
     for iss in issues:
-        issue_text = e(iss.get("issue", ""))
-        resolution = e(iss.get("resolution", ""))
-        hod = iss.get("holding_or_dicta", "")
-        hod_class = "holding" if hod == "holding" else "dicta"
-        hod_label = e(hod)
-        parts.append(
-            f"<p><strong>Issue:</strong> {issue_text}</p>\n"
-            f'<p><strong>Resolution:</strong> {resolution} '
-            f'<span class="{hod_class}">({hod_label})</span></p>'
-        )
+        if isinstance(iss, str):
+            parts.append(f"<p>{e(iss)}</p>")
+        else:
+            issue_text = e(iss.get("issue", ""))
+            resolution = e(iss.get("resolution", ""))
+            hod = iss.get("holding_or_dicta", "")
+            hod_class = "holding" if hod == "holding" else "dicta"
+            hod_label = e(hod)
+            parts.append(
+                f"<p><strong>Issue:</strong> {issue_text}</p>\n"
+                f'<p><strong>Resolution:</strong> {resolution} '
+                f'<span class="{hod_class}">({hod_label})</span></p>'
+            )
     return "\n".join(parts)
 
 

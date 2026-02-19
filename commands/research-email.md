@@ -1,0 +1,417 @@
+---
+description: "Non-interactive legal research triggered by incoming email. Reads email body from /tmp/gmail-monitor/req-${REQUEST_ID}.txt. Never pauses for user input."
+argument-hint: "(no arguments — reads REQUEST_ID from environment)"
+allowed-tools: Task, Read, Write, Bash, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
+---
+
+# Email-Triggered Legal Research
+
+You are conducting systematic legal research triggered by an incoming email. This is a **non-interactive** run. Never call `AskUserQuestion`. Apply all defaults automatically.
+
+## Context Management
+
+The state file is the primary data store. Your context is ephemeral.
+
+- **The state file (`research-{search_id}-state.json`) is the single source of truth.** Full subagent results go there, not in context.
+- **After each phase**, write results to state immediately via `manage_state.py`.
+- **In context, retain only summaries**: counts, top candidate names/scores, cluster_id lists.
+- **Run `/compact` between phases.**
+- **Delegate mechanical work to scripts** in `${CLAUDE_PLUGIN_ROOT}/scripts/`. Never compose HTML manually or manipulate JSON in context when a script can do it.
+
+---
+
+## Preflight Check
+
+Call `mcp__plugin_legal_research_courtlistener__search_cases` with query `"test"`, limit `1`.
+
+- If the tool returns case data: **PASSED**. Proceed.
+- If the tool returns an error, is unavailable, or you cannot find it in your tools: **FAILED**. Write the error HTML below to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
+
+```html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Research Error</title></head>
+<body><h1>Legal Research: Service Unavailable</h1>
+<p>The CourtListener case law database is currently unavailable. Please try again later.</p>
+</body></html>
+```
+
+---
+
+## Read Email Body
+
+Run:
+```bash
+cat /tmp/gmail-monitor/req-${REQUEST_ID}.txt
+```
+
+If `REQUEST_ID` is not set, or the file is missing, or the file is empty: write the error HTML below to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
+
+```html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Research Error</title></head>
+<body><h1>Legal Research: Input Error</h1>
+<p>No email body was found for this request. Please try again.</p>
+</body></html>
+```
+
+Store the email body text for use in Phase E.
+
+---
+
+## Phase E: Email Query Extraction
+
+Launch one **email-query-extractor** agent. Pass it the full email body text as its input.
+
+Parse the JSON response the agent returns.
+
+**If `status == "no_query"`**: Write the informational HTML below to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop normally.
+
+```html
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Legal Research: No Question Found</title></head>
+<body>
+<h1>Legal Research</h1>
+<p>Your email did not appear to contain a legal research question.</p>
+<p>To request research, send an email with a clear legal question, such as:</p>
+<ul>
+  <li>"What is the standard for qualified immunity in excessive force cases in the Ninth Circuit?"</li>
+  <li>"Find cases where courts have held employers liable for independent contractor injuries."</li>
+  <li>"How have courts analyzed First Amendment retaliation claims by public employees?"</li>
+</ul>
+<p>Include any relevant jurisdictional context or factual details in your email.</p>
+</body>
+</html>
+```
+
+**If `status == "query"`**: Store the extracted query as `RESEARCH_QUERY`. Log to stdout: `Query extracted: [RESEARCH_QUERY]`. Proceed.
+
+---
+
+## Search ID & File Naming
+
+At the start of Phase 0, generate a Search ID:
+1. Take 2-3 meaningful words from `RESEARCH_QUERY` (skip stop words). Lowercase, join with hyphens.
+2. Append `-DDSS` (zero-padded day + seconds of current time).
+
+Files: `research-{search_id}-state.json` and `research-{search_id}-results.html`
+
+Log the Search ID and file names to stdout.
+
+---
+
+## Phase 0: Structured Query Decomposition
+
+Parse `RESEARCH_QUERY` into structured elements. Apply these **non-interactive defaults** automatically — never ask the user:
+
+| Element | Default when unspecified |
+|---------|-------------------------|
+| `jurisdiction` | `"federal (national)"` |
+| `query_type` | `"mixed"` |
+| `depth_preference` | `"deep"` |
+| `date_range` | `{"after": "", "before": ""}` (no filter) |
+
+Parse into all standard fields:
+
+| Element | Description |
+|---------|-------------|
+| `legal_questions` | Doctrinal/legal questions being asked |
+| `fact_pattern` | Specific factual scenario, if any |
+| `jurisdiction` | Jurisdiction mentioned or implied (default: `"federal (national)"`) |
+| `date_range` | Temporal constraints |
+| `constraints` | Other constraints |
+| `query_type` | `"fact"`, `"law"`, or `"mixed"` (default: `"mixed"`) |
+| `depth_preference` | Always `"deep"` for email mode |
+| `required_legal_context` | Inferred prerequisites: `party_relationship`, `legal_predicate`, `applicable_test` |
+
+Log the parsed query table to stdout. Write the initial state file with the two extra email fields:
+
+```json
+{
+  "search_id": "...",
+  "email_mode": true,
+  "request_id": "${REQUEST_ID}",
+  "parsed_query": { "legal_questions": [], "fact_pattern": "", "jurisdiction": "", "date_range": {}, "constraints": [], "query_type": "", "depth_preference": "deep", "original_input": "[RESEARCH_QUERY]", "required_legal_context": { "party_relationship": null, "legal_predicate": null, "applicable_test": null } },
+  "workflow_mode": null,
+  "search_strategies": [],
+  "search_terms_table": [],
+  "cases_table": [],
+  "search_results_raw": [],
+  "analyzed_cases": [],
+  "iteration_log": [],
+  "pending_leads": [],
+  "explored_cluster_ids": [],
+  "explored_terms": [],
+  "pivotal_cases": []
+}
+```
+
+---
+
+## Phase 1: Query Analysis
+
+Launch 1 **query-analyst** agent with the `parsed_query` object. It returns 4-6 search strategies with keyword queries, semantic queries, court filters, and rationale.
+
+Review the strategies. If they miss an obvious angle, add strategies yourself.
+
+Save the strategies to the state file under `search_strategies`.
+
+Log the strategies to stdout.
+
+---
+
+## Phase 2: Parallel Initial Search
+
+Launch 3-4 **case-searcher** agents in parallel (1-2 strategies per agent). Each strategy should run as its own agent when possible — parallelism is cheap and results write to state, not context.
+
+After all agents return:
+
+1. For each agent's results, write the JSON to a temp file and run:
+   ```
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
+   ```
+2. Add an `iteration_log` entry for round 1.
+3. Log a round 1 report to stdout: queries executed, result counts, top 5-8 candidates.
+
+**After writing to state, clear context.** Keep only: total case count, top candidate names/cluster_ids, and the list of cluster_ids for Phase 3. Run `/compact`.
+
+---
+
+## Phase 3: Deep Case Analysis
+
+Select the top 8-12 cases for analysis. Run:
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json top-candidates 12
+```
+
+Prioritize: highest initial_relevance, highest cite_count, court variety, recency.
+
+Log the selection with rationale to stdout.
+
+Launch **one case-analyzer agent per case**, all in parallel. Each receives exactly ONE cluster_id and the `parsed_query` (including `query_type`).
+
+After all agents return:
+
+1. For each agent's result, write it to a temp file and run:
+   ```
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-analysis /tmp/analysis_{cluster_id}.json
+   ```
+   This also auto-extracts follow-up leads into `pending_leads`.
+
+2. Log per-case results to stdout: name, citation, relevance, position, one-line finding.
+3. Note new search leads discovered.
+
+**Clear context after writing to state.** Keep only per-case one-line summaries and the new search terms. Run `/compact`.
+
+---
+
+## Phase 3.6: Pivotal Case Detection
+
+After all analyses are merged into state, scan for `pivotal_case` fields in the collected analyses.
+
+Run:
+```bash
+python3 -c "
+import json, sys
+state = json.load(open('research-{search_id}-state.json'))
+pivotal = []
+seen = set()
+for case in state.get('analyzed_cases', []):
+    pc = case.get('pivotal_case')
+    if pc and pc.get('name') and pc['name'] not in seen:
+        pivotal.append(pc)
+        seen.add(pc['name'])
+if pivotal:
+    state['pivotal_cases'] = pivotal
+    json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+    print(json.dumps(pivotal))
+else:
+    print('[]')
+"
+```
+
+If the output is non-empty, log to stdout:
+```
+### Pivotal Authority Identified
+[Name of pivotal case] — [rule_adopted]
+Note: [note from pivotal_case field]
+Cases pre-dating [year] will be deprioritized in subsequent rounds.
+```
+
+---
+
+## Phase 3.5: Automatic Depth Decision
+
+Run:
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json should-refine
+```
+
+The script returns a JSON decision:
+```json
+{"decision": "refine|skip", "reason": "...", "stats": {...}}
+```
+
+Because `depth_preference` is always `"deep"` in email mode, the script will always return `"refine"`. Log the decision to stdout:
+```
+### Depth Decision: Refining
+Reason: [reason from script]
+High-relevance cases: [N] | Unexplored leads: [N]
+```
+
+Set `workflow_mode` to `"deep"` in the state file. Proceed to Phase 4.
+
+---
+
+## Phase 4: Iterative Refinement
+
+Perform at least one refinement round. This phase uses prior results to drive new searches.
+
+### Step 1: Analyze leads
+
+Run:
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+```
+
+This returns unexplored citation leads and search terms that emerged from analyzed cases but haven't been searched yet.
+
+### Step 2: Generate refined strategies
+
+Based on the leads:
+1. For **citation leads**: Use `mcp__plugin_legal_research_courtlistener__lookup_citation` to resolve cited cases. If they return a cluster_id not already in the cases_table, they're candidates for analysis.
+2. For **new terminology**: Generate 2-3 new keyword/semantic queries using terms discovered in the analyzed cases.
+3. For the 2-3 most important analyzed cases (highest relevance), use `mcp__plugin_legal_research_courtlistener__find_citing_cases` to find recent applications.
+4. **If analogous expansion was triggered** (the `should-refine` reason includes "analogous expansion needed"): Launch a second **query-analyst** agent with an explicit instruction: *"The original factual pattern returned few results. Generate 2-3 additional strategies using broader factual framings, analogous party configurations, or the governing legal doctrine for this type of scenario. Tag all strategies as `strategy_type: 'analogous'`."* Incorporate these strategies into the refinement search round.
+
+### Step 3: Execute searches
+
+Launch **case-searcher** agents with refined strategies. Merge results via `manage_state.py add-searches --round 2`.
+
+### Step 4: Analyze new finds
+
+Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Launch **case-analyzer** agents for the top 5-8. Merge via `manage_state.py add-analysis`.
+
+### Step 5: Check for another round
+
+Run both checks (N = current round number, e.g., 2 for the first refinement round):
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json check-diminishing-returns --round N
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+```
+
+Log the decision:
+```
+### Round N+1 Decision: [Continuing / Stopping — diminishing returns]
+Overlap: [X]% of new cases already analyzed | Unexplored leads: [N]
+```
+
+**Decision logic**:
+- If diminishing-returns `decision == "stop"` **OR** unexplored leads <= 3: proceed to Phase 5.
+- If diminishing-returns `decision == "continue"` **AND** unexplored leads > 3: run one more round.
+
+Mark explored terms and cluster_ids:
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json mark-explored /tmp/explored.json
+```
+
+Log refinement results to stdout: new terms discovered, strategy productivity, new cases found and analyzed.
+
+Run `/compact` before Phase 5.
+
+---
+
+## Phase 5: Output
+
+**Do NOT compose HTML manually.** Use the script. Follow this exact sequence.
+
+### Step 1: Generate summary stats
+
+Run:
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json summary
+```
+
+Log the summary to stdout: total queries, total cases, analyzed count, relevance distribution.
+
+### Step 2: Compose Summary Answer prose
+
+Read the state file. Identify all analyzed cases with `relevance_ranking` >= 3.
+
+Compose a single prose paragraph (4-8 sentences) that:
+- **Directly answers the research question** — lead with the answer, not a description of the research
+- **Cites the 3-5 most important cases** by name and Bluebook citation
+- **Draws on each case's `relevance_summary` and `issues_presented` holdings** — do not add new analysis beyond what the case-analyzers found
+- **Notes any split in authority** or unresolved questions across the cases
+- **Uses Bluebook citation format** throughout (e.g., _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020))
+
+Write the paragraph to the state file under `summary_answer` using:
+```
+python3 -c "
+import json, sys
+state = json.load(open('research-{search_id}-state.json'))
+state['summary_answer'] = sys.stdin.read().strip()
+json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+" <<'SUMMARY_EOF'
+[your composed paragraph here]
+SUMMARY_EOF
+```
+
+### Step 3: Generate local HTML
+
+Run (no output path argument — script derives it from state path):
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{search_id}-state.json
+```
+
+This produces `research-{search_id}-results.html` in the current working directory (`email-queries/`).
+
+### Step 4: Run quote validation
+
+Run (annotates the local HTML in-place):
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{search_id}-state.json --annotate
+```
+
+This script checks opinion text files, runs the three-tier matcher, and annotates the HTML with verification labels.
+
+If the script reports missing opinion files, launch **one case-analyzer agent per missing file** with a minimal prompt: "Fetch the opinion text for cluster_id {id} using `get_case_text` with `max_characters: 50000` and save it to `/tmp/vq_opinion_{id}.txt` using the Write tool. Return the file size. Do NOT analyze the case." Then rerun the validation script.
+
+Log the quote validation summary to stdout.
+
+### Step 5: Copy annotated result to delivery path
+
+Verify the local HTML exists, then copy:
+```bash
+mkdir -p /tmp/gmail-monitor
+cp research-{search_id}-results.html /tmp/gmail-monitor/result-${REQUEST_ID}.html
+```
+
+If `research-{search_id}-results.html` does not exist (generate_html.py failed), write a minimal error HTML to the result path instead:
+```html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Research Error</title></head>
+<body><h1>Legal Research: Report Generation Failed</h1>
+<p>Research completed but the report could not be generated. Please try again.</p>
+</body></html>
+```
+
+### Step 6: Log completion to stdout
+
+```
+Email research complete.
+Request: ${REQUEST_ID} | Search: {search_id}
+State: email-queries/research-{search_id}-state.json
+Result: /tmp/gmail-monitor/result-${REQUEST_ID}.html
+```
+
+---
+
+## Important Notes
+
+- **Never call `AskUserQuestion`** — this is a non-interactive command.
+- **No synthesizer agent**: HTML is generated by `generate_html.py` from state file data. No LLM re-interpretation.
+- **Verbatim rendering**: Case data fields are rendered exactly as returned by analyzers.
+- **Citation format**: Bluebook format throughout.
+- **One case per analyzer**: Never pass multiple cases to a single case-analyzer agent.
+- **State file always current**: Update after every phase via `manage_state.py`.
+- **Scripts use `${CLAUDE_PLUGIN_ROOT}`**: All scripts are in the plugin's `scripts/` directory.
+- **`depth_preference` is always `"deep"`** in email mode — refinement always runs.
+- **Output sequencing is critical**: generate HTML → validate quotes (in-place annotation) → copy to delivery path. Never copy before annotation.

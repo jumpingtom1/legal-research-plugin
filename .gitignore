@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+mcp-server/.venv/
+
+# Runtime output (research sessions)
+research-*-state.json
+research-*-results.html
+email-queries/
+
+# macOS
+.DS_Store
+
+# Temp files (quote validation)
+/tmp/vq_opinion_*.txt

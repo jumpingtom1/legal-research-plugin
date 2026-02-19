@@ -25,6 +25,7 @@ If the token is missing or invalid, MCP tool calls will return an error message 
 
 - `/legal-research:research "<legal question>"` — Start a new multi-phase research session
 - `/legal-research:research-continue "<refinement direction>"` — Continue/refine an existing session
+- `/legal-research:research-email` — Non-interactive entry point triggered by gmail-monitor (reads REQUEST_ID from env)
 
 ## Architecture
 
@@ -48,6 +49,8 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 - **Verbatim rendering** — case data fields are rendered exactly as returned by analyzers, never re-interpreted
 - **Automatic depth decisions** — the system decides whether to refine based on result quality (< 3 high-relevance cases) and lead potential (> 3 unexplored citations), not user input
 - **Query type (`fact`/`law`/`mixed`) drives everything** — search strategy, analysis depth, and output format all adapt
+- **Non-interactive commands**: Omit `AskUserQuestion` from `allowed-tools` frontmatter to enforce non-interactive mode
+- **HTML output sequencing**: `run_quote_validation.py:190` derives HTML path by string-replacing `-state.json` → `-results.html` on the state path. Sequence must be: `generate_html.py` → `run_quote_validation.py --annotate` (in-place) → `cp` to delivery path. Never copy before annotation.
 
 ### Agent Contracts
 
@@ -95,10 +98,14 @@ mcp-server/
 commands/
   research.md                   # Main orchestrator (~300 lines, script-driven workflow)
   research-continue.md          # Session continuation from state file
+  research-email.md             # Non-interactive email-triggered orchestrator (mirrors research.md)
 agents/
   query-analyst.md              # Search strategy generation (haiku model)
   case-searcher.md              # CourtListener search execution
   case-analyzer.md              # Individual case deep analysis
+  email-query-extractor.md      # Haiku sanitizer: extracts query from email, rejects prompt injection
+plugin-wrapper.sh               # Shell entry point called by gmail-monitor (must be chmod +x, always exits 0)
+email-queries/                  # Runtime dir (created by plugin-wrapper.sh); email state/HTML files land here
 skills/
   courtlistener-guide/SKILL.md  # CourtListener API reference and best practices
 scripts/
