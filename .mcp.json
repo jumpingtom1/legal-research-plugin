@@ -1,12 +1,18 @@
 {
-  "courtlistener": {
-    "type": "stdio",
-    "command": "/usr/local/bin/python3",
-    "args": [
-      "${CLAUDE_PLUGIN_ROOT}/mcp-server/server.py"
-    ],
-    "env": {
-      "COURTLISTENER_API_TOKEN": "${COURTLISTENER_API_TOKEN}"
+  "mcpServers": {
+    "courtlistener": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/home/tom/claude/legal-research-plugin/mcp-server",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "COURTLISTENER_API_TOKEN": "${COURTLISTENER_API_TOKEN}"
+      }
     }
   }
 }

@@ -8,6 +8,19 @@ This is a **Claude Code plugin** (`legal-research`) that orchestrates iterative 
 
 **Bundled MCP**: The CourtListener MCP server is included in `mcp-server/` and registered automatically via `.mcp.json`. No external MCP setup required — only `COURTLISTENER_API_TOKEN` must be set in the environment.
 
+## Setup (New Users)
+
+Before using this plugin, you need a free CourtListener API token:
+
+1. Register at [courtlistener.com](https://www.courtlistener.com/sign-in/) and generate an API token under your account settings.
+2. Export the token in your shell config (`~/.bashrc`, `~/.zshrc`, etc.):
+   ```bash
+   export COURTLISTENER_API_TOKEN="your-token-here"
+   ```
+3. Reload your shell (`source ~/.bashrc`) or open a new terminal, then launch Claude Code.
+
+If the token is missing or invalid, MCP tool calls will return an error message rather than results. Verify it is set with `echo $COURTLISTENER_API_TOKEN` before starting a session.
+
 ## Usage
 
 - `/legal-research:research "<legal question>"` — Start a new multi-phase research session
