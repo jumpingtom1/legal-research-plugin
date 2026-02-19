@@ -1,0 +1,8 @@
+{
+  "name": "legal-research",
+  "description": "Iterative legal research using CourtListener case law database with structured search, analysis, and synthesis",
+  "version": "1.0.0",
+  "author": {
+    "name": "Thomas Bode"
+  }
+}
