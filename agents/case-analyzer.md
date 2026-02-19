@@ -1,7 +1,7 @@
 ---
 name: case-analyzer
 description: Reads and deeply analyzes court opinions for relevance to a legal research question. Extracts factual background, holdings, dicta, and follow-up leads. Use when analyzing full case text.
-tools: mcp__courtlistener__get_case_text, Write
+tools: mcp__plugin_legal_research_courtlistener__get_case_text, Write
 model: inherit
 ---
 
@@ -41,7 +41,7 @@ Both facts and legal analysis matter. Produce the full analysis as specified in 
 
 ## Your Process
 
-1. **Retrieve the full opinion text** using `mcp__courtlistener__get_case_text` with the cluster_id (use max_characters=50000)
+1. **Retrieve the full opinion text** using `mcp__plugin_legal_research_courtlistener__get_case_text` with the cluster_id (use max_characters=50000)
 2. **Save the raw opinion text** to `/tmp/vq_opinion_{cluster_id}.txt` using the Write tool. This is used by the quote validation phase later — do this immediately after retrieval, before any analysis.
 3. **Read the opinion carefully**, identifying all material relevant to the research question
 4. **Apply the analysis mode** based on the `query_type` you received:

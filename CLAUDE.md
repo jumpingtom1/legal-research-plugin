@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **Claude Code plugin** (`legal-research`) that orchestrates iterative legal research workflows using the CourtListener case law database via MCP. It is not a traditional software project — there is no build system, package manager, or compiled code. The plugin consists of markdown specification files that define commands, agents, and skills, plus Python scripts that handle mechanical tasks (HTML generation, state management, quote validation).
 
-**Requires**: CourtListener MCP server configured and running.
+**Bundled MCP**: The CourtListener MCP server is included in `mcp-server/` and registered automatically via `.mcp.json`. No external MCP setup required — only `COURTLISTENER_API_TOKEN` must be set in the environment.
 
 ## Usage
 
@@ -57,13 +57,13 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 
 ### CourtListener MCP Tools
 
-Five tools available (documented in `skills/courtlistener-guide/SKILL.md`):
+The MCP server lives in `mcp-server/` and is launched automatically by `.mcp.json` using `uv run`. Tools are prefixed `mcp__plugin_legal_research_courtlistener__`. Five tools available (documented in `skills/courtlistener-guide/SKILL.md`):
 
-- `search_cases` — Keyword search (Solr syntax; keep to 2-3 concepts per query)
-- `semantic_search` — Natural language conceptual search
-- `lookup_citation` — Resolve citation strings to cases
-- `get_case_text` — Full opinion text (up to 50k chars)
-- `find_citing_cases` — Cases citing a given decision
+- `mcp__plugin_legal_research_courtlistener__search_cases` — Keyword search (Solr syntax; keep to 2-3 concepts per query)
+- `mcp__plugin_legal_research_courtlistener__semantic_search` — Natural language conceptual search
+- `mcp__plugin_legal_research_courtlistener__lookup_citation` — Resolve citation strings to cases
+- `mcp__plugin_legal_research_courtlistener__get_case_text` — Full opinion text (up to 50k chars)
+- `mcp__plugin_legal_research_courtlistener__find_citing_cases` — Cases citing a given decision
 
 Query pattern: `[Core Concept] AND ([Variant1] OR [Variant2])` — avoid overloading queries with 5+ terms.
 
@@ -75,6 +75,10 @@ All citations must follow **Bluebook format**: _Smith v. Jones_, 500 F.3d 123 (9
 
 ```
 .claude-plugin/plugin.json     # Plugin metadata (name, version, author)
+.mcp.json                      # Registers bundled CourtListener MCP server (auto-launched)
+mcp-server/
+  server.py                    # CourtListener MCP server (FastMCP, stdio transport)
+  pyproject.toml               # Dependencies: mcp[cli], httpx (managed by uv)
 commands/
   research.md                   # Main orchestrator (~300 lines, script-driven workflow)
   research-continue.md          # Session continuation from state file

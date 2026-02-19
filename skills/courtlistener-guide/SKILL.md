@@ -9,11 +9,11 @@ description: Best practices for legal research using CourtListener case law data
 
 Five MCP tools provide access to the CourtListener case law database:
 
-- **`mcp__courtlistener__search_cases`**: Keyword search for opinions. Supports exact phrase matching with quotes, Boolean operators. Params: query, court, filed_after, filed_before, order_by, limit (max 20).
-- **`mcp__courtlistener__semantic_search`**: Natural language / conceptual search. Finds cases using similar concepts even with different terminology. Put specific terms in quotes to force exact matching within semantic results. Params: query, court, filed_after, filed_before, limit (max 20).
-- **`mcp__courtlistener__lookup_citation`**: Resolves legal citations (e.g., "410 U.S. 113") to their corresponding cases. Can extract multiple citations from surrounding text.
-- **`mcp__courtlistener__get_case_text`**: Retrieves the full text of a court opinion by cluster_id or opinion_id. Returns up to 50,000 characters; longer opinions are truncated with a link to the full version.
-- **`mcp__courtlistener__find_citing_cases`**: Finds cases that cite a given case (by cluster_id). Useful for tracing how a doctrine has developed or finding the most recent applications.
+- **`mcp__plugin_legal_research_courtlistener__search_cases`**: Keyword search for opinions. Supports exact phrase matching with quotes, Boolean operators. Params: query, court, filed_after, filed_before, order_by, limit (max 20).
+- **`mcp__plugin_legal_research_courtlistener__semantic_search`**: Natural language / conceptual search. Finds cases using similar concepts even with different terminology. Put specific terms in quotes to force exact matching within semantic results. Params: query, court, filed_after, filed_before, limit (max 20).
+- **`mcp__plugin_legal_research_courtlistener__lookup_citation`**: Resolves legal citations (e.g., "410 U.S. 113") to their corresponding cases. Can extract multiple citations from surrounding text.
+- **`mcp__plugin_legal_research_courtlistener__get_case_text`**: Retrieves the full text of a court opinion by cluster_id or opinion_id. Returns up to 50,000 characters; longer opinions are truncated with a link to the full version.
+- **`mcp__plugin_legal_research_courtlistener__find_citing_cases`**: Finds cases that cite a given case (by cluster_id). Useful for tracing how a doctrine has developed or finding the most recent applications.
 
 ## Bluebook Citation Format
 

@@ -1,7 +1,7 @@
 ---
 name: case-searcher
 description: Executes CourtListener searches using provided search strategies and returns structured case results. Use when performing legal case law searches.
-tools: mcp__courtlistener__search_cases, mcp__courtlistener__semantic_search, mcp__courtlistener__lookup_citation, mcp__courtlistener__find_citing_cases
+tools: mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__find_citing_cases
 model: inherit
 ---
 
@@ -18,11 +18,11 @@ You receive:
 
 ## Your Process
 
-1. **Execute each keyword query** using `mcp__courtlistener__search_cases` with limit=15
-2. **Execute each semantic query** using `mcp__courtlistener__semantic_search` with limit=15
+1. **Execute each keyword query** using `mcp__plugin_legal_research_courtlistener__search_cases` with limit=15
+2. **Execute each semantic query** using `mcp__plugin_legal_research_courtlistener__semantic_search` with limit=15
 3. Apply any court filters and date filters specified in the strategy (or from `parsed_query` if not in the strategy)
-4. If any citations are mentioned in the results that seem important, resolve them with `mcp__courtlistener__lookup_citation`
-5. If instructed to find citing cases for a specific cluster_id, use `mcp__courtlistener__find_citing_cases`
+4. If any citations are mentioned in the results that seem important, resolve them with `mcp__plugin_legal_research_courtlistener__lookup_citation`
+5. If instructed to find citing cases for a specific cluster_id, use `mcp__plugin_legal_research_courtlistener__find_citing_cases`
 
 ## Execution Log (REQUIRED)
 

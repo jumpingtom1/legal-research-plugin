@@ -1,7 +1,7 @@
 ---
 description: "Conduct iterative legal research using CourtListener case law database"
 argument-hint: "<legal question or research topic>"
-allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__courtlistener__search_cases, mcp__courtlistener__semantic_search, mcp__courtlistener__lookup_citation, mcp__courtlistener__get_case_text, mcp__courtlistener__find_citing_cases
+allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
 ---
 
 # Iterative Legal Research
@@ -24,14 +24,14 @@ The state file is the primary data store. Your context is ephemeral.
 
 ## Preflight Check
 
-Call `mcp__courtlistener__search_cases` with query `"test"`, limit `1`.
+Call `mcp__plugin_legal_research_courtlistener__search_cases` with query `"test"`, limit `1`.
 
 - If the tool returns case data: **PASSED**. Proceed.
 - If the tool returns an error, is unavailable, or you cannot find it in your tools: **FAILED**. Output this and stop:
 
 ```
 ERROR: CourtListener MCP server is not available. Legal research cannot proceed.
-The preflight call to mcp__courtlistener__search_cases did not succeed.
+The preflight call to mcp__plugin_legal_research_courtlistener__search_cases did not succeed.
 Check MCP settings (~/.claude.json, .claude/settings.json, or .mcp.json).
 ```
 
@@ -255,9 +255,9 @@ This returns unexplored citation leads and search terms that emerged from analyz
 ### Step 2: Generate refined strategies
 
 Based on the leads:
-1. For **citation leads**: Use `mcp__courtlistener__lookup_citation` to resolve cited cases. If they return a cluster_id not already in the cases_table, they're candidates for analysis.
+1. For **citation leads**: Use `mcp__plugin_legal_research_courtlistener__lookup_citation` to resolve cited cases. If they return a cluster_id not already in the cases_table, they're candidates for analysis.
 2. For **new terminology**: Generate 2-3 new keyword/semantic queries using terms discovered in the analyzed cases.
-3. For the 2-3 most important analyzed cases (highest relevance), use `mcp__courtlistener__find_citing_cases` to find recent applications.
+3. For the 2-3 most important analyzed cases (highest relevance), use `mcp__plugin_legal_research_courtlistener__find_citing_cases` to find recent applications.
 4. **If analogous expansion was triggered** (the `should-refine` reason includes "analogous expansion needed"): Launch a second **query-analyst** agent with an explicit instruction: *"The original factual pattern returned few results. Generate 2-3 additional strategies using broader factual framings, analogous party configurations, or the governing legal doctrine for this type of scenario. Tag all strategies as `strategy_type: 'analogous'`."* Incorporate these strategies into the refinement search round.
 
 ### Step 3: Execute searches

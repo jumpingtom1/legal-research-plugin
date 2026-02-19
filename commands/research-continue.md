@@ -1,7 +1,7 @@
 ---
 description: "Continue or refine an existing legal research session"
 argument-hint: "<search_id> <refinement direction or additional question>"
-allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__courtlistener__search_cases, mcp__courtlistener__semantic_search, mcp__courtlistener__lookup_citation, mcp__courtlistener__get_case_text, mcp__courtlistener__find_citing_cases
+allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
 ---
 
 # Continue Legal Research
