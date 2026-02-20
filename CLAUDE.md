@@ -66,10 +66,20 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 |--------|---------|
 | `scripts/generate_html.py` | Reads state file, produces complete HTML report |
 | `scripts/manage_state.py` | State file operations: add-searches, add-analysis, get-leads, top-candidates, summary, should-refine, mark-explored |
+| `scripts/log_session.py` | Session logging: `error` and `note` write to `session_log` in state; `summary` assembles and appends one record to `legal-research-sessions.jsonl` |
 | `scripts/run_quote_validation.py` | Orchestrates quote validation: checks opinion files, runs matcher, annotates HTML |
 | `scripts/vq_matcher.py` | Three-tier quote matching (normalized substring → token sequence → fuzzy) |
+
+**`quote_validation` state structure**: `run_quote_validation.py` writes `state["quote_validation"]["summary"]` (nested under a `"summary"` key), with fields: `total`, `verified`, `likely_match`, `possible_match`, `not_found`, `not_found_truncated`, `skipped`.
+
+**Script import convention**: All scripts that import `state_io` use `sys.path.insert(0, str(Path(__file__).parent))` at the top (before the import), so they work regardless of the calling directory.
+
+**Script dependency convention**: Scripts in `scripts/` use Python stdlib only — no external packages. (`httpx` is available only inside `mcp-server/` via `uv`.) Use `urllib.request` for HTTP, not `httpx`.
+
+**`session_log` state structure**: `{"started_at": "ISO-timestamp-or-null", "errors": [], "notes": []}`. `started_at` is set on the first `error` or `note` call — orchestrators should emit a note early (Phase 1/2) to capture a meaningful start time.
 | `scripts/vq_annotator.py` | Annotates HTML blockquotes with validation labels |
 | `scripts/state_io.py` | Shared I/O utilities: `load_state`, `save_state`, `normalize_excerpts` — imported by all three main scripts |
+| `scripts/preflight.py` | Hard-stop preflight: checks `COURTLISTENER_API_TOKEN` and pings API; exits 0 (PASS) or 1 (FAIL). Run before any MCP calls. |
 
 ### CourtListener MCP Tools
 
@@ -111,8 +121,10 @@ skills/
 scripts/
   generate_html.py              # HTML report generator (reads state file)
   manage_state.py               # State file management (dedup, leads, decisions)
+  log_session.py                # Session logging: error/note write to state; summary appends to JSONL log
   run_quote_validation.py       # Quote validation orchestrator
   vq_matcher.py                 # Three-tier quote matcher
   vq_annotator.py               # HTML quote annotation
   state_io.py                   # Shared load_state/save_state/normalize_excerpts
+legal-research-sessions.jsonl   # Append-only JSONL log; one record per completed session (created on first run)
 ```

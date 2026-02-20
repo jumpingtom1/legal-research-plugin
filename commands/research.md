@@ -24,16 +24,23 @@ The state file is the primary data store. Your context is ephemeral.
 
 ## Preflight Check
 
-Call `mcp__plugin_legal_research_courtlistener__search_cases` with query `"test"`, limit `1`.
+Run the preflight script:
 
-- If the tool returns case data: **PASSED**. Proceed.
-- If the tool returns an error, is unavailable, or you cannot find it in your tools: **FAILED**. Output this and stop:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py
+```
+
+**This is a hard stop.**
+
+- If the script **exits 0** and prints `PASS:` → API is available. Proceed.
+- If the script **exits non-zero** (any other exit code) → **STOP IMMEDIATELY.** Do not proceed to any other phase. Output:
 
 ```
-ERROR: CourtListener MCP server is not available. Legal research cannot proceed.
-The preflight call to mcp__plugin_legal_research_courtlistener__search_cases did not succeed.
-Check MCP settings (~/.claude.json, .claude/settings.json, or .mcp.json).
+ERROR: CourtListener MCP is not available. Legal research cannot proceed.
+[paste the full output of preflight.py here]
 ```
+
+Do not attempt to work around this check or continue the workflow.
 
 ---
 
@@ -103,7 +110,8 @@ Show the parsed query table to the user. Write the initial state file:
   "pending_leads": [],
   "explored_cluster_ids": [],
   "explored_terms": [],
-  "pivotal_cases": []
+  "pivotal_cases": [],
+  "session_log": {"errors": [], "notes": []}
 }
 ```
 
@@ -135,6 +143,12 @@ After all agents return:
 3. Display a round 1 report: queries executed, result counts, top 5-8 candidates.
 
 **After writing to state, clear context.** Keep only: total case count, top candidate names/cluster_ids, and the list of cluster_ids for Phase 3. Run `/compact`.
+
+**Session notes**: Log notable conditions using:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "..."
+```
+Log a note when you observe: low total case count (< 10), unexpectedly narrow or broad results, the `query_type` inference was non-obvious, or any other pattern worth capturing for later review.
 
 ---
 
@@ -230,6 +244,11 @@ Log the decision and reasoning to the user:
 Reason: [reason from script]
 High-relevance cases: [N] | Unexplored leads: [N]
 [If low_factual_matches triggered: "Low factual match — triggering analogous scenario expansion."]
+```
+
+Log the depth decision as a session note:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "Depth decision: [refine|skip] — [reason from script]"
 ```
 
 Set `workflow_mode` in the state file (`"deep"` if refining, `"quick"` if skipping).
@@ -360,7 +379,13 @@ If the script reports missing opinion files, launch **one case-analyzer agent pe
 
 Display the quote validation summary to the user.
 
-### Step 5: Present results
+### Step 5: Write session log
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode interactive --output-file "$(pwd)/research-{search_id}-results.html"
+```
+
+### Step 6: Present results
 
 ```
 Results saved to: research-{search_id}-results.html (open in browser)

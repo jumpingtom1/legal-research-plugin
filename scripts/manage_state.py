@@ -51,10 +51,13 @@ def cmd_add_searches(state, args):
     searcher_output["round"] = round_num
     state.setdefault("search_results_raw", []).append(searcher_output)
 
+    dups_this_call = len(cases) - new_count
+    state["total_duplicates_skipped"] = state.get("total_duplicates_skipped", 0) + dups_this_call
+
     total = len(state.get("cases_table", []))
     result = {
         "new_cases_added": new_count,
-        "duplicates_skipped": len(cases) - new_count,
+        "duplicates_skipped": dups_this_call,
         "searches_logged": len(searches),
         "total_cases_in_state": total
     }

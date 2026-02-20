@@ -22,10 +22,16 @@ The state file is the primary data store. Your context is ephemeral.
 
 ## Preflight Check
 
-Call `mcp__plugin_legal_research_courtlistener__search_cases` with query `"test"`, limit `1`.
+Run the preflight script:
 
-- If the tool returns case data: **PASSED**. Proceed.
-- If the tool returns an error, is unavailable, or you cannot find it in your tools: **FAILED**. Write the error HTML below to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py
+```
+
+**This is a hard stop.**
+
+- If the script **exits 0** and prints `PASS:` → API is available. Proceed.
+- If the script **exits non-zero** (any other exit code) → **STOP IMMEDIATELY.** Write the error HTML below to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop. Do not proceed to any other phase.
 
 ```html
 <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Research Error</title></head>
@@ -33,6 +39,8 @@ Call `mcp__plugin_legal_research_courtlistener__search_cases` with query `"test"
 <p>The CourtListener case law database is currently unavailable. Please try again later.</p>
 </body></html>
 ```
+
+Do not attempt to work around this check or continue the workflow.
 
 ---
 
@@ -140,7 +148,8 @@ Log the parsed query table to stdout. Write the initial state file with the two 
   "pending_leads": [],
   "explored_cluster_ids": [],
   "explored_terms": [],
-  "pivotal_cases": []
+  "pivotal_cases": [],
+  "session_log": {"errors": [], "notes": []}
 }
 ```
 
@@ -164,7 +173,23 @@ Launch 3-4 **case-searcher** agents in parallel (1-2 strategies per agent). Each
 
 After all agents return:
 
-1. For each agent's results, write the JSON to a temp file and run:
+**Before writing searcher results to state**, check each agent's returned JSON for `"error": "API_FAILURE"`. If present, skip that result and log:
+```
+⚠ Searcher for strategy {strategy_id}: API_FAILURE — no valid API response received. Excluded.
+```
+Then run:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "Phase 2"
+```
+
+If **every** searcher returned `API_FAILURE`, run:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level fatal --message "All searchers returned API_FAILURE — research halted" --phase "Phase 2"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode email
+```
+Then write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
+
+1. For each agent's results (excluding `API_FAILURE`), write the JSON to a temp file and run:
    ```
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
    ```
@@ -255,6 +280,11 @@ Because `depth_preference` is always `"deep"` in email mode, the script will alw
 ### Depth Decision: Refining
 Reason: [reason from script]
 High-relevance cases: [N] | Unexplored leads: [N]
+```
+
+Log the depth decision as a session note:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "Depth decision: refine — [reason from script]"
 ```
 
 Set `workflow_mode` to `"deep"` in the state file. Proceed to Phase 4.
@@ -377,7 +407,13 @@ If the script reports missing opinion files, launch **one case-analyzer agent pe
 
 Log the quote validation summary to stdout.
 
-### Step 5: Copy annotated result to delivery path
+### Step 5: Write session log
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode email --output-file "/tmp/gmail-monitor/result-${REQUEST_ID}.html"
+```
+
+### Step 6: Copy annotated result to delivery path
 
 Verify the local HTML exists, then copy:
 ```bash
@@ -393,7 +429,7 @@ If `research-{search_id}-results.html` does not exist (generate_html.py failed),
 </body></html>
 ```
 
-### Step 6: Log completion to stdout
+### Step 7: Log completion to stdout
 
 ```
 Email research complete.

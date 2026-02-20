@@ -12,6 +12,28 @@ You are continuing a legal research session previously started with `/legal-rese
 
 ---
 
+## Preflight Check
+
+Run the preflight script:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py
+```
+
+**This is a hard stop.**
+
+- If the script **exits 0** and prints `PASS:` → API is available. Proceed.
+- If the script **exits non-zero** (any other exit code) → **STOP IMMEDIATELY.** Do not proceed to any other step. Output:
+
+```
+ERROR: CourtListener MCP is not available. Legal research cannot proceed.
+[paste the full output of preflight.py here]
+```
+
+Do not attempt to work around this check or continue the workflow.
+
+---
+
 ## Step 1: Parse Arguments and Load State
 
 The first token in `$ARGUMENTS` is the **Search ID**. Everything after it is the **refinement direction**.
@@ -52,7 +74,10 @@ If previous session was quick mode (`workflow_mode === "quick"`): the natural co
 - **New angle**: Generate new search strategies from the refinement direction
 - **Deepen analysis**: Analyze cases found but not yet deeply analyzed (via `manage_state.py top-candidates`)
 
-Present your plan briefly before proceeding.
+Present your plan briefly before proceeding. Log the continuation strategy as a session note:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "research-continue: [brief description of continuation strategy]"
+```
 
 ---
 
@@ -62,6 +87,11 @@ Follow the same patterns as the main research command:
 - Launch **case-searcher** agents for new strategies
 - Launch **case-analyzer** agents for new cases (one per case, pass `query_type`)
 - Use **find_citing_cases** for citation tracing
+
+If a case-searcher agent returns `"error": "API_FAILURE"`, log it:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "research-continue Step 3"
+```
 
 Merge all results via `manage_state.py`:
 ```
@@ -88,7 +118,11 @@ If quote validation reports missing opinion files, launch re-fetch agents (minim
 
 ---
 
-## Step 5: Present Results
+## Step 5: Write session log and present results
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode continue --output-file "$(pwd)/research-{search_id}-results.html"
+```
 
 Highlight what changed from the previous session:
 - New cases discovered (with citations)
