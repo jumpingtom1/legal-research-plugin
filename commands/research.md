@@ -127,7 +127,19 @@ Launch 3-4 **case-searcher** agents in parallel (1-2 strategies per agent). Each
 
 After all agents return:
 
-1. For each agent's results, write the JSON to a temp file and run:
+**Before writing searcher results to state**, check each agent's returned JSON for
+`"error": "API_FAILURE"`. If present, skip that result and log to the user:
+```
+⚠ Searcher for strategy {strategy_id}: API_FAILURE — no valid API response received. Excluded.
+```
+If **every** searcher returned `API_FAILURE`, stop and output:
+```
+ERROR: All CourtListener searches failed — no API_STATUS:200 response was received from any query.
+Check that COURTLISTENER_API_TOKEN is set correctly and the MCP server is reachable.
+Research cannot continue.
+```
+
+1. For each agent's results (excluding any with `"error": "API_FAILURE"`), write the JSON to a temp file and run:
    ```
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
    ```
@@ -153,7 +165,13 @@ Launch **one case-analyzer agent per case**, all in parallel. Each receives exac
 
 After all agents return:
 
-1. For each agent's result, write it to a temp file and run:
+**Before writing analyzer results to state**, check each result for `"error": "NO_CASE_TEXT"`.
+If present, skip writing to state and log to the user:
+```
+⚠ Analyzer for cluster_id {cluster_id}: NO_CASE_TEXT — opinion text unavailable. Excluded from report.
+```
+
+1. For each agent's result (excluding any with `"error": "NO_CASE_TEXT"`), write it to a temp file and run:
    ```
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-analysis /tmp/analysis_{cluster_id}.json
    ```

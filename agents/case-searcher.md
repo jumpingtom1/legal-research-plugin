@@ -49,6 +49,32 @@ SEARCH 2: semantic — when can police officers claim qualified immunity after u
 - If a query returns **15 results** (the limit), note that there are likely more matches. Consider rerunning with `order_by: "citeCount desc"` to prioritize influential cases, or suggest a more targeted variant.
 - After all queries complete, provide a summary: "Executed [N] queries. Total results: [N]. After dedup: [N] unique cases."
 
+## API Gate (MANDATORY — check before returning anything)
+
+Every response from `search_cases`, `semantic_search`, and `find_citing_cases` begins with
+`API_STATUS:200` if the CourtListener API returned a successful response. If a response does NOT
+begin with `API_STATUS:200`, the API call failed (wrong token, network error, HTTP error, etc.).
+
+**Before returning your results JSON**, check: did at least one tool call produce a response
+starting with `API_STATUS:200`?
+
+- **Yes** → proceed normally. Strip the `API_STATUS:200\n` prefix before reading the response.
+- **No** (every call returned an error) → return ONLY this and nothing else:
+
+```json
+{
+  "error": "API_FAILURE",
+  "strategy_id": "<strategy_id you were given>",
+  "message": "All CourtListener tool calls failed — no API_STATUS:200 response was received. No case data can be reported.",
+  "searches_executed": [],
+  "cases": [],
+  "total_unique_cases": 0
+}
+```
+
+Note: A successful API call that returns 0 matching cases is NOT a failure — it will still start
+with `API_STATUS:200`. Only return the error JSON when no tool call succeeded at all.
+
 ## What You Must Return
 
 Return your results as structured JSON:

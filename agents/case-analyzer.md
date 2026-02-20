@@ -42,6 +42,22 @@ Both facts and legal analysis matter. Produce the full analysis as specified in 
 ## Your Process
 
 1. **Retrieve the full opinion text** using `mcp__plugin_legal_research_courtlistener__get_case_text` with the cluster_id (use max_characters=50000)
+
+   **API gate**: If the `get_case_text` response does NOT begin with `API_STATUS:200`, the API
+   call failed. Do NOT write anything to `/tmp/vq_opinion_{cluster_id}.txt`. Do NOT produce any
+   case analysis. Return ONLY this and stop:
+
+   ```json
+   {
+     "error": "NO_CASE_TEXT",
+     "cluster_id": "<cluster_id you were given>",
+     "message": "get_case_text did not return API_STATUS:200 for this cluster_id. Analysis cannot proceed."
+   }
+   ```
+
+   If the response starts with `API_STATUS:200`, strip that prefix line before processing the
+   opinion text.
+
 2. **Save the raw opinion text** to `/tmp/vq_opinion_{cluster_id}.txt` using the Write tool. This is used by the quote validation phase later — do this immediately after retrieval, before any analysis.
 3. **Read the opinion carefully**, identifying all material relevant to the research question
 4. **Apply the analysis mode** based on the `query_type` you received:
