@@ -135,15 +135,6 @@ def format_search_results(data: dict, header: str) -> str:
     return "\n".join(lines)
 
 
-def _ok(response: str) -> str:
-    """Wrap a successful API response with a machine-readable status prefix.
-
-    Agents check for this prefix to verify the API returned a 200 response.
-    Absence of this prefix means the call failed (error string was returned instead).
-    """
-    return f"API_STATUS:200\n{response}"
-
-
 def _search_params(
     query: str,
     court: str,
@@ -197,7 +188,7 @@ async def search_cases(
     data = await api_request(client, "GET", f"{BASE_V4}/search/", params=params)
     if isinstance(data, str):
         return data
-    return _ok(format_search_results(data, f'Search results for "{query}"'))
+    return format_search_results(data, f'Search results for "{query}"')
 
 
 @mcp.tool()
@@ -292,7 +283,7 @@ async def semantic_search(
     data = await api_request(client, "GET", f"{BASE_V4}/search/", params=params)
     if isinstance(data, str):
         return data
-    return _ok(format_search_results(data, f'Semantic search results for "{query}"'))
+    return format_search_results(data, f'Semantic search results for "{query}"')
 
 
 @mcp.tool()
@@ -412,7 +403,7 @@ async def get_case_text(
             f"Full opinion: {full_url}]"
         )
 
-    return _ok("\n".join(lines))
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -442,7 +433,7 @@ async def find_citing_cases(
     data = await api_request(client, "GET", f"{BASE_V4}/search/", params=params)
     if isinstance(data, str):
         return data
-    return _ok(format_search_results(data, f"Cases citing cluster {cluster_id}"))
+    return format_search_results(data, f"Cases citing cluster {cluster_id}")
 
 
 # ---------------------------------------------------------------------------

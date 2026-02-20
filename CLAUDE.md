@@ -83,17 +83,6 @@ The MCP server lives in `mcp-server/` and is launched automatically by `.mcp.jso
 
 Query pattern: `[Core Concept] AND ([Variant1] OR [Variant2])` — avoid overloading queries with 5+ terms.
 
-### Anti-Hallucination Protocol
-
-Successful responses from the 4 **case law** tools (`search_cases`, `semantic_search`, `get_case_text`, `find_citing_cases`) are prefixed with `API_STATUS:200\n` by the `_ok()` helper in `mcp-server/server.py`. Error paths from `api_request()` start with `"Error:"` and are NOT wrapped. PACER/docket tools and `lookup_citation` are NOT wrapped.
-
-Agents gate on this prefix:
-- `case-searcher`: no `API_STATUS:200` from any tool → returns `{"error": "API_FAILURE", "strategy_id": ..., "searches_executed": [], "cases": [], ...}`
-- `case-analyzer`: `get_case_text` lacks prefix → returns `{"error": "NO_CASE_TEXT", "cluster_id": ..., ...}` and stops
-- `commands/research.md`: checks for these error keys before writing to state; logs warnings and halts if all searchers fail
-
-**When adding new case law tools to `server.py`**: wrap the successful return value with `_ok()`. Do NOT apply to PACER/docket tools.
-
 ### Citation Format
 
 All citations must follow **Bluebook format**: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020).
