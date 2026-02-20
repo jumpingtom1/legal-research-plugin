@@ -7,6 +7,7 @@ All case data is rendered verbatim from the state file — no interpretation.
 
 import sys
 import json
+import re
 import html as html_mod
 from datetime import date
 
@@ -26,74 +27,43 @@ CSS = """
     h2 { font-size: 1.4em; color: #333; margin-top: 2em; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
     h3 { font-size: 1.15em; color: #444; margin-top: 1.5em; }
     blockquote {
-      border-left: 4px solid #c0392b;
+      border-left: 3px solid #c0392b;
       margin: 1em 0;
       padding: 0.5em 1em;
-      background: #fdf2f2;
+      background: #fef9f9;
       font-style: italic;
     }
-    .about-report {
+    .warnings {
       background: #fff8e1;
       border: 1px solid #ffcc02;
       border-left: 5px solid #f0a500;
       padding: 1.2em;
-      border-radius: 6px;
       margin-bottom: 2em;
       font-size: 0.92em;
       line-height: 1.6;
     }
-    .about-report strong { color: #b8860b; }
-    .about-report ul { margin: 0.5em 0; padding-left: 1.5em; }
-    .index { background: #f8f9fa; border: 1px solid #dee2e6; padding: 1em 1.5em; border-radius: 6px; margin-bottom: 2em; }
-    .index ol { margin: 0.3em 0; padding-left: 1.5em; }
-    .index a { color: #2980b9; text-decoration: none; }
-    .index a:hover { text-decoration: underline; }
-    .query-display { background: #f5f5f5; padding: 1em; border-radius: 6px; margin: 1em 0; }
-    .query-display code { background: #e8e8e8; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
-    .case-entry { margin-bottom: 2em; padding: 1em; border: 1px solid #e0e0e0; border-radius: 6px; background: #fafafa; }
-    .case-entry a { color: #2c3e50; }
+    .warnings strong { color: #b8860b; }
+    .warnings ul { margin: 0.5em 0; padding-left: 1.5em; }
+    .contents { background: #f8f9fa; border: 1px solid #dee2e6; padding: 1em 1.5em; margin-bottom: 2em; }
+    .contents ol { margin: 0.3em 0; padding-left: 1.5em; }
+    .contents a { color: #2980b9; text-decoration: none; }
+    .contents a:hover { text-decoration: underline; }
+    .query-display { background: #f5f5f5; padding: 1em; margin: 1em 0; }
+    .query-display code { background: #e8e8e8; padding: 2px 5px; font-size: 0.9em; }
     .case-name { font-style: italic; font-weight: bold; }
-    .relevance { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold; }
+    .relevance { display: inline-block; padding: 2px 8px; font-size: 0.85em; font-weight: bold; }
     .relevance-5 { background: #27ae60; color: white; }
     .relevance-4 { background: #2ecc71; color: white; }
     .relevance-3 { background: #f39c12; color: white; }
     .relevance-2 { background: #e67e22; color: white; }
     .relevance-1 { background: #e74c3c; color: white; }
-    .holding { color: #27ae60; font-weight: bold; }
-    .dicta { color: #e67e22; font-style: italic; }
     a { color: #2980b9; text-decoration: none; }
     a:hover { text-decoration: underline; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.92em; }
     th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
     th { background: #f5f5f5; font-weight: bold; }
     tr:nth-child(even) { background: #fafafa; }
-    .meta { color: #666; font-size: 0.9em; margin-top: 3em; border-top: 1px solid #eee; padding-top: 1em; }
-    .quote-verified::after { content: " [Verified]"; color: #27ae60; font-size: 0.8em; font-style: normal; }
-    .quote-likely::after { content: " [Likely Match]"; color: #6b8e23; font-size: 0.8em; font-style: normal; }
-    .quote-possible::after { content: " [Unverified]"; color: #e67e22; font-size: 0.8em; font-style: normal; font-weight: bold; }
-    .quote-truncated::after { content: " [Unverified — opinion truncated]"; color: #888; font-size: 0.8em; font-style: normal; }
-    .quote-not-found::after { content: " [UNVERIFIED]"; color: #e74c3c; font-size: 0.8em; font-style: normal; font-weight: bold; }
-    .context-match { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; font-weight: bold; margin-left: 4px; }
-    .context-match-full { background: #27ae60; color: white; }
-    .context-match-partial { background: #f39c12; color: white; }
-    .context-match-absent { background: #e74c3c; color: white; }
-    .facts-detail {
-      margin-top: 1em;
-      border: 1px solid #e0e0e0;
-      border-radius: 4px;
-      padding: 0.5em 1em;
-      background: #f9f9f9;
-      color: #555;
-      font-size: 0.92em;
-    }
-    .facts-detail summary {
-      cursor: pointer;
-      font-weight: bold;
-      color: #666;
-      padding: 0.3em 0;
-    }
-    .facts-detail summary:hover { color: #333; }
-    .facts-detail p { margin: 0.5em 0 0 0; }
+    .about-report { color: #666; font-size: 0.9em; margin-top: 3em; border-top: 1px solid #eee; padding-top: 1em; }
 """
 
 
@@ -128,18 +98,9 @@ def normalize_case(case):
             })
         case["issues_presented"] = issues
 
-    # analysis_notes → ranking_explanation
-    if "ranking_explanation" not in case and "analysis_notes" in case:
-        case["ranking_explanation"] = case["analysis_notes"]
-
-    # relevance_summary fallback to ranking_explanation
-    if "relevance_summary" not in case or not case.get("relevance_summary"):
-        case["relevance_summary"] = case.get("ranking_explanation", "")
-
     # Ensure defaults for fields the templates read
     case.setdefault("bluebook_citation", "")
     case.setdefault("relevance_summary", "")
-    case.setdefault("ranking_explanation", "")
     case.setdefault("key_excerpts", [])
     case.setdefault("issues_presented", [])
     case.setdefault("factual_background", "")
@@ -148,7 +109,6 @@ def normalize_case(case):
     case.setdefault("position", "neutral")
     case.setdefault("url", "")
     case.setdefault("case_name", "")
-    case.setdefault("context_match", "n/a")
 
     return case
 
@@ -159,42 +119,38 @@ def normalize_state(state):
     return state
 
 
-def section_about(state):
-    search_id = state.get("search_id", "")
+def section_warnings(state):
+    request_id = state.get("request_id", "")
     workflow_mode = state.get("workflow_mode", "unspecified")
     quick_note = ""
     if workflow_mode == "quick":
         quick_note = (
             f'<p><strong>Quick mode:</strong> This report is based on initial search results only. '
             f'Iterative refinement (additional search rounds, citation tracing) was not performed. '
-            f'Use <code>/legal-research:research-continue {e(search_id)} '
+            f'Use <code>/legal-research:research-continue {e(request_id)} '
             f'"&lt;direction&gt;"</code> to expand this research.</p>'
         )
-    return f"""<div class="about-report" id="about">
-  <strong>About This Report</strong>
-  <p>This legal research report was generated by an AI assistant (Claude) using the CourtListener case law database. It is a research aid, not legal advice.</p>
+    return f"""<div class="warnings" id="warnings">
+  <strong>Important Limitations</strong>
   <ul>
     <li><strong>Verify all propositions.</strong> Every statement and characterization of a case's holding, facts, or reasoning should be checked against the full text of the cited authority. AI-generated case summaries may contain errors, omissions, or mischaracterizations.</li>
     <li><strong>Shepardize all cases.</strong> Cases cited in this report have not been shepardized. Before relying on any authority, confirm it has not been reversed, overruled, or otherwise undermined by subsequent decisions.</li>
     <li><strong>Search coverage is limited.</strong> This report searched the CourtListener database, which may not include all relevant authorities. Unreported decisions, recent filings, and cases from some courts may be absent.</li>
     <li><strong>AI limitations.</strong> The AI may misidentify holdings vs. dicta, or draw incorrect connections between cases. All analysis should be independently verified.</li>
-    <li><strong>Quotes validated.</strong> All material appearing in quotation marks in this report has been programmatically verified against the original court opinion text. Excerpts are labeled as Verified, Likely Match, or Unverified based on automated text matching. See individual quote annotations for details.</li>
   </ul>
   {quick_note}
 </div>"""
 
 
-def section_index():
-    return """<nav class="index" id="index">
+def section_contents():
+    return """<nav class="contents" id="contents">
   <strong>Contents</strong>
-  <ol start="0">
-    <li><a href="#about">About This Report</a></li>
-    <li><a href="#index">Index</a></li>
-    <li><a href="#query">User Query &amp; Decomposed Queries</a></li>
-    <li><a href="#summary">Summary Answer</a></li>
-    <li><a href="#authorities">Authorities</a></li>
-    <li><a href="#all-results">All Search Results</a></li>
-    <li><a href="#search-process">Search Process</a></li>
+  <ol>
+    <li><a href="#query">User Query</a></li>
+    <li><a href="#short-answer">Short Answer</a></li>
+    <li><a href="#leading-authorities">Leading Authorities</a></li>
+    <li><a href="#all-results">All Results</a></li>
+    <li><a href="#about-search">About this Search</a></li>
   </ol>
 </nav>"""
 
@@ -218,7 +174,7 @@ def section_query(state):
     constraints_str = e("; ".join(constraints)) if constraints else "None"
     workflow = e(state.get("workflow_mode", "unspecified"))
 
-    return f"""<h2 id="query">User Query &amp; Decomposed Queries</h2>
+    return f"""<h2 id="query">1. User Query</h2>
 <h3>Original Query</h3>
 <div class="query-display"><p>{original}</p></div>
 <h3>Decomposed Query</h3>
@@ -235,50 +191,24 @@ def section_query(state):
 </table>"""
 
 
-def section_summary(state):
+def section_short_answer(state):
     analyzed = state.get("analyzed_cases", [])
-    query_type = state.get("parsed_query", {}).get("query_type", "mixed")
     iteration_log = state.get("iteration_log", [])
     rounds = len(iteration_log) if iteration_log else 1
-
     total = len(analyzed)
-    supports = sum(1 for c in analyzed if c.get("position") == "supports")
-    opposes = sum(1 for c in analyzed if c.get("position") == "opposes")
-    neutral = sum(1 for c in analyzed if c.get("position") not in ("supports", "opposes"))
-    high_rel = [c for c in analyzed if c.get("relevance_ranking", 0) >= 4]
-
-    position_line = ""
-    if query_type in ("law", "mixed"):
-        position_line = f"<strong>{supports}</strong> supporting, <strong>{opposes}</strong> opposing, <strong>{neutral}</strong> neutral."
-    else:
-        position_line = f"<strong>{len(high_rel)}</strong> scored relevance 4 or higher for factual similarity."
-
-    case_lines = []
-    for c in sorted(high_rel, key=lambda x: x.get("relevance_ranking", 0), reverse=True):
-        name = e(c.get("case_name", ""))
-        cite = e(c.get("bluebook_citation", ""))
-        rel = c.get("relevance_ranking", 0)
-        explanation = e(c.get("relevance_summary", ""))
-        # First sentence only
-        first_sentence = explanation.split(". ")[0]
-        if not first_sentence.endswith("."):
-            first_sentence += "."
-        case_lines.append(f"<li><em>{name}</em> ({cite}) — Relevance {rel}/5: {first_sentence}</li>")
-
-    cases_html = "\n".join(case_lines) if case_lines else "<li>No cases scored relevance 4 or higher.</li>"
 
     # Prose summary answer (composed by orchestrator LLM, stored in state)
     summary_answer = state.get("summary_answer", "")
     prose_html = ""
     if summary_answer:
-        prose_html = f"<p>{e(summary_answer)}</p>"
+        paragraphs = [p.strip() for p in summary_answer.split("\n\n") if p.strip()]
+        # summary_answer is produced by resolve-citations and is already HTML-safe
+        # (prose text is escaped; citations use <em> tags, not markdown underscores).
+        prose_html = "\n".join(f"<p>{p}</p>" for p in paragraphs)
 
-    return f"""<h2 id="summary">Summary Answer</h2>
+    return f"""<h2 id="short-answer">2. Short Answer</h2>
 {prose_html}
-<p><strong>{total}</strong> cases analyzed in depth across <strong>{rounds}</strong> search round(s). {position_line}</p>
-<ul>
-{cases_html}
-</ul>"""
+<p><strong>{total}</strong> cases analyzed in depth across <strong>{rounds}</strong> search round(s).</p>"""
 
 
 def _render_excerpts(excerpts):
@@ -286,8 +216,7 @@ def _render_excerpts(excerpts):
     parts = []
     for ex in excerpts:
         text = e(ex.get("text", ""))
-        ctx = e(ex.get("context", ""))
-        parts.append(f"<blockquote>{text}<br><small>{ctx}</small></blockquote>")
+        parts.append(f"<blockquote>{text}</blockquote>")
     return "\n".join(parts)
 
 
@@ -301,190 +230,101 @@ def _render_issues(issues):
             issue_text = e(iss.get("issue", ""))
             resolution = e(iss.get("resolution", ""))
             hod = iss.get("holding_or_dicta", "")
-            hod_class = "holding" if hod == "holding" else "dicta"
-            hod_label = e(hod)
+            hod_label = "Holding" if hod == "holding" else "Dicta"
             parts.append(
                 f"<p><strong>Issue:</strong> {issue_text}</p>\n"
-                f'<p><strong>Resolution:</strong> {resolution} '
-                f'<span class="{hod_class}">({hod_label})</span></p>'
+                f"<p><strong>{hod_label}:</strong> {resolution}</p>"
             )
     return "\n".join(parts)
 
 
-def _render_context_match_badge(context_match):
-    """Render a context_match badge or empty string."""
-    if context_match == "full":
-        return '<span class="context-match context-match-full">Context: Match</span>'
-    elif context_match == "partial":
-        return '<span class="context-match context-match-partial">Context: Partial</span>'
-    elif context_match == "absent":
-        return '<span class="context-match context-match-absent">Context: Mismatch</span>'
-    return ""
-
-
-def render_case_entry(case, query_type):
-    """Render a single case entry.
-
-    Order: case name → citation · relevance badge [· context badge] → URL →
-           Why relevant → Issue/Resolution pairs (all query types) →
-           Key quotes → [fact/mixed only: collapsible Factual Background details]
-    """
+def render_authority_entry(case):
+    """Render a single leading authority entry."""
     name = e(case.get("case_name", ""))
     cite = e(case.get("bluebook_citation", ""))
     rel = case.get("relevance_ranking", 0)
     url = e(case.get("url", ""))
     relevance_summary = e(case.get("relevance_summary", ""))
-    context_match = case.get("context_match", "n/a")
 
-    context_badge = _render_context_match_badge(context_match)
-
-    # Issues/resolution — rendered for all query types
-    issues_html = _render_issues(case.get("issues_presented", []))
-
-    # Key quotes — always rendered
+    issues_html = _render_issues(case.get("issues_presented", [])[:1])
     excerpts_html = _render_excerpts(case.get("key_excerpts", []))
 
-    # Collapsible factual background — fact and mixed only
-    facts_detail_html = ""
-    if query_type in ("fact", "mixed"):
-        facts = e(case.get("factual_background", ""))
-        outcome = e(case.get("factual_outcome", ""))
-        outcome_line = f"<p><strong>Outcome:</strong> {outcome}</p>" if outcome else ""
-        if facts or outcome:
-            facts_detail_html = (
-                f'<details class="facts-detail">'
-                f"<summary>Factual Background</summary>"
-                f"<p>{facts}</p>"
-                f"{outcome_line}"
-                f"</details>"
-            )
+    link_html = f'<a href="{url}">CourtListener</a>' if url else ""
 
-    return f"""<div class="case-entry">
-  <h3><span class="case-name">{name}</span></h3>
-  <p>{cite} &middot; <span class="relevance relevance-{rel}">Relevance: {rel}/5</span>{context_badge}</p>
-  <p><a href="{url}">{url}</a></p>
-  <p><strong>Why relevant:</strong> {relevance_summary}</p>
+    return f"""<div style="margin-bottom: 2em; padding: 1em; border: 1px solid #e0e0e0; background: #fafafa;">
+  <p><em><strong>{name}</strong></em>, {cite} &mdash; {link_html} &mdash; <span class="relevance relevance-{rel}">Relevance: {rel}/5</span></p>
+  <p><strong>Why Relevant:</strong> {relevance_summary}</p>
   {issues_html}
   {excerpts_html}
-  {facts_detail_html}
 </div>"""
 
 
-def section_authorities(state):
+def section_leading_authorities(state):
     analyzed = state.get("analyzed_cases", [])
-    query_type = state.get("parsed_query", {}).get("query_type", "mixed")
 
     if not analyzed:
-        return '<h2 id="authorities">Authorities</h2>\n<p>No cases were deeply analyzed.</p>'
+        return '<h2 id="leading-authorities">3. Leading Authorities</h2>\n<p>No cases were deeply analyzed.</p>'
 
-    def by_relevance(cases):
-        return sorted(cases, key=lambda x: x.get("relevance_ranking", 0), reverse=True)
+    sorted_cases = sorted(analyzed, key=lambda x: x.get("relevance_ranking", 0), reverse=True)
+    top_cases = sorted_cases[:10]
 
-    def render(case):
-        return render_case_entry(case, query_type)
-
-    if query_type == "fact":
-        cases_html = "\n".join(render(c) for c in by_relevance(analyzed))
-        return f'<h2 id="authorities">Authorities</h2>\n{cases_html}'
-
-    # law or mixed: group by position
-    supports = by_relevance([c for c in analyzed if c.get("position") == "supports"])
-    opposes = by_relevance([c for c in analyzed if c.get("position") == "opposes"])
-    neutral = by_relevance([c for c in analyzed if c.get("position") not in ("supports", "opposes")])
-
-    parts = ['<h2 id="authorities">Authorities</h2>']
-
-    parts.append("<h3>Supporting Authorities</h3>")
-    if supports:
-        parts.extend(render(c) for c in supports)
-    else:
-        parts.append("<p>No supporting authorities identified in this research.</p>")
-
-    parts.append("<h3>Opposing or Distinguishable Authorities</h3>")
-    if opposes:
-        parts.extend(render(c) for c in opposes)
-    else:
-        parts.append("<p>No opposing authorities identified in this research.</p>")
-
-    if neutral:
-        parts.append("<h3>Other Relevant Authorities</h3>")
-        parts.extend(render(c) for c in neutral)
-
-    return "\n".join(parts)
+    entries_html = "\n".join(render_authority_entry(c) for c in top_cases)
+    return f'<h2 id="leading-authorities">3. Leading Authorities</h2>\n{entries_html}'
 
 
 def section_all_results(state):
     cases_table = state.get("cases_table", [])
-    analyzed_ids = {c.get("cluster_id") for c in state.get("analyzed_cases", [])}
     analyzed_map = {c.get("cluster_id"): c for c in state.get("analyzed_cases", [])}
 
-    total = len(cases_table)
-    analyzed_count = sum(1 for c in cases_table if c.get("cluster_id") in analyzed_ids)
-
-    # Sort by relevance desc then cite_count desc
+    # Sort by final score descending
     def sort_key(c):
         cid = c.get("cluster_id")
         if cid in analyzed_map:
-            rel = analyzed_map[cid].get("relevance_ranking", 0)
-        else:
-            rel = c.get("initial_relevance", 0)
-        return (rel, c.get("cite_count", 0))
+            return analyzed_map[cid].get("relevance_ranking", 0)
+        return c.get("initial_relevance", 0)
 
     cases_sorted = sorted(cases_table, key=sort_key, reverse=True)
 
     rows = []
-    for c in cases_sorted:
+    for i, c in enumerate(cases_sorted, 1):
         cid = c.get("cluster_id")
-        name = e(c.get("case_name", ""))
-        is_analyzed = cid in analyzed_ids
         ac = analyzed_map.get(cid, {})
 
+        name = e(c.get("case_name", ""))
         cite = e(ac.get("bluebook_citation", c.get("bluebook_citation", "")))
-        court = e(c.get("court", ""))
-        date_filed = e(c.get("date_filed", ""))
-        cite_count = c.get("cite_count", 0)
-
-        if is_analyzed:
-            rel = ac.get("relevance_ranking", 0)
-            position = e(ac.get("position", ""))
-        else:
-            rel = c.get("initial_relevance", 0)
-            position = "&mdash;"
-
         url = e(ac.get("url", c.get("url", "")))
-        analyzed_str = "Yes" if is_analyzed else "No"
+        link_html = f'<a href="{url}">View</a>' if url else "&mdash;"
+        relevance_note = e(c.get("relevance_note", ""))
+        score = ac.get("relevance_ranking", c.get("initial_relevance", 0))
 
         rows.append(
             f"<tr>"
+            f"<td>{i}</td>"
             f"<td><em>{name}</em></td>"
             f"<td>{cite}</td>"
-            f"<td>{court}</td>"
-            f"<td>{date_filed}</td>"
-            f"<td>{cite_count}</td>"
-            f'<td><span class="relevance relevance-{rel}">{rel}</span></td>'
-            f"<td>{position}</td>"
-            f"<td>{analyzed_str}</td>"
-            f'<td><a href="{url}">View</a></td>'
+            f"<td>{link_html}</td>"
+            f"<td>{relevance_note}</td>"
+            f'<td><span class="relevance relevance-{score}">{score}</span></td>'
             f"</tr>"
         )
 
     rows_html = "\n".join(rows)
-    return f"""<h2 id="all-results">All Search Results</h2>
-<p>{total} unique cases found across all search rounds. {analyzed_count} selected for deep analysis (marked below).</p>
+    total = len(cases_table)
+    return f"""<h2 id="all-results">4. All Results</h2>
 <table>
   <thead>
     <tr>
-      <th>Case Name</th><th>Citation</th><th>Court</th><th>Date</th>
-      <th>Cited By</th><th>Relevance</th><th>Position</th><th>Analyzed</th><th>Link</th>
+      <th>#</th><th>Case Name</th><th>Citation</th><th>Link</th><th>Relevance Note</th><th>Score</th>
     </tr>
   </thead>
   <tbody>
 {rows_html}
   </tbody>
-</table>"""
+</table>
+<p style="font-size: 0.9em; color: #666;">{total} unique cases found across all search rounds.</p>"""
 
 
-def section_search_process(state):
+def section_about_search(state):
     search_terms = state.get("search_terms_table", [])
     strategies = state.get("search_strategies", [])
     iteration_log = state.get("iteration_log", [])
@@ -527,7 +367,7 @@ def section_search_process(state):
 
     num_strategies = len(strategies)
 
-    return f"""<h2 id="search-process">Search Process</h2>
+    return f"""<h2 id="about-search">5. About this Search</h2>
 <h3>Search Strategies</h3>
 <p>The query analyst generated {num_strategies} search strategies:</p>
 <table>
@@ -548,21 +388,31 @@ def section_search_process(state):
 </table>"""
 
 
+def section_about_report(state):
+    request_id = state.get("request_id", "unknown")
+    today = date.today().isoformat()
+    state_file = f"research-{request_id}-state.json"
+    return f"""<div class="about-report">
+  <p>Request ID: {e(request_id)}</p>
+  <p>Generated by Legal Research Plugin using Claude + CourtListener &middot; {today}</p>
+  <p>State file: {e(state_file)}</p>
+</div>"""
+
+
 def generate_report(state):
     state = normalize_state(state)
-    search_id = state.get("search_id", "unknown")
     original_input = state.get("parsed_query", {}).get("original_input", "Legal Research")
     title = original_input[:80]
-    today = date.today().isoformat()
 
     sections = [
-        section_about(state),
-        section_index(),
+        section_warnings(state),
+        section_contents(),
         section_query(state),
-        section_summary(state),
-        section_authorities(state),
+        section_short_answer(state),
+        section_leading_authorities(state),
         section_all_results(state),
-        section_search_process(state),
+        section_about_search(state),
+        section_about_report(state),
     ]
 
     body = "\n\n".join(sections)
@@ -576,14 +426,9 @@ def generate_report(state):
   <style>{CSS}</style>
 </head>
 <body>
-  <p style="font-family: monospace; color: #666; font-size: 0.85em; margin-bottom: 0;">Search ID: <strong>{e(search_id)}</strong></p>
   <main>
 {body}
   </main>
-  <div class="meta">
-    <p>Generated by Legal Research Plugin &middot; Search ID: {e(search_id)} &middot; {today}</p>
-    <p>State file: research-{e(search_id)}-state.json</p>
-  </div>
 </body>
 </html>"""
 

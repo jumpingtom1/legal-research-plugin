@@ -39,7 +39,7 @@ Write 5-20 sentences of legal prose that directly answers `user_query`. Follow t
 
 ## Output Format
 
-Plain text only. Each sentence ends with a period, followed immediately by the citation label(s). No JSON wrapper. No headers. No markdown formatting. No introduction like "Based on the research..." — start directly with the legal answer.
+Plain text only. Each sentence ends with a period, followed immediately by the citation label(s). No JSON wrapper. No headers. No markdown formatting. No introduction like "Based on the research..." — start directly with the legal answer. Write up to three paragraphs of 2-4 sentences each. Separate paragraphs with double new line characters \n\n - this is the only allowed formatting. Avoid long answers where a short one will suffice. Brevity is good.
 
 Example format:
 ```

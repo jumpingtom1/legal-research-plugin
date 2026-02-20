@@ -240,7 +240,7 @@ def cmd_summary(state, args):
     pivotal_cases = state.get("pivotal_cases", [])
 
     result = {
-        "search_id": state.get("search_id", ""),
+        "request_id": state.get("request_id", ""),
         "query_type": state.get("parsed_query", {}).get("query_type", ""),
         "workflow_mode": state.get("workflow_mode"),
         "total_cases_found": len(cases_table),
@@ -376,8 +376,13 @@ def cmd_mark_explored(state, args):
 
 
 def cmd_resolve_citations(state, args):
-    """Replace [C1][C2] identifier runs in summary_answer_raw with Bluebook citations."""
+    """Replace [C1][C2] identifier runs in summary_answer_raw with Bluebook citations.
+
+    Produces HTML-safe output: the raw answer text is HTML-escaped, and citation
+    strings use <em> tags (not markdown underscores) so they render correctly in email.
+    """
     import re
+    import html as html_mod
 
     raw = state.get("summary_answer_raw", "")
     mapping = state.get("summary_answer_map", {})
@@ -385,13 +390,21 @@ def cmd_resolve_citations(state, args):
         print(json.dumps({"error": "missing summary_answer_raw or summary_answer_map"}))
         return
 
+    def citation_to_html(bc):
+        """Convert a Bluebook citation string to HTML, replacing _text_ with <em>text</em>."""
+        escaped = html_mod.escape(bc)
+        return re.sub(r'_([^_]+)_', r'<em>\1</em>', escaped)
+
     def replace_run(m):
         ids = re.findall(r'C(\d+)', m.group(0))
-        citations = [mapping[f'C{n}']["bluebook_citation"]
+        citations = [citation_to_html(mapping[f'C{n}']["bluebook_citation"])
                      for n in ids if f'C{n}' in mapping]
-        return "; ".join(citations) if citations else m.group(0)
+        return "; ".join(citations) if citations else html_mod.escape(m.group(0))
 
-    resolved = re.sub(r'(?:\[C\d+\])+', replace_run, raw)
+    # HTML-escape the prose first, then substitute citation placeholders with HTML citations.
+    # [, ], C, and digits are not HTML-special, so the regex still matches after escaping.
+    escaped_raw = html_mod.escape(raw)
+    resolved = re.sub(r'(?:\[C\d+\])+', replace_run, escaped_raw)
     state["summary_answer"] = resolved
     print(json.dumps({"ok": True, "length": len(resolved)}))
 

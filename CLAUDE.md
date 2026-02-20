@@ -24,7 +24,7 @@ If the token is missing or invalid, MCP tool calls will return an error message 
 ## Usage
 
 - `/legal-research:research "<legal question>"` — Start a new multi-phase research session
-- `/legal-research:research-continue "<refinement direction>"` — Continue/refine an existing session
+- `/legal-research:research-continue "<request_id> <refinement direction>"` — Continue/refine an existing session
 - `/legal-research:research-email` — Non-interactive entry point triggered by gmail-monitor (reads REQUEST_ID from env)
 
 ## Architecture
@@ -43,14 +43,16 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 
 ### Key Design Principles
 
-- **State file (`research-{slug}-state.json`) is the single source of truth** — context is ephemeral, all results persist in this file
+- **State file (`research-{request_id}-state.json`) is the single source of truth** — context is ephemeral, all results persist in this file. `request_id` format: `REQ-YYYYMMDD-HHMMSS-XXXX`.
 - **Scripts handle mechanical work** — HTML generation, state management, deduplication, quote validation are all deterministic Python, never LLM-composed
 - **No synthesizer agent** — the HTML report is assembled by `generate_html.py` directly from case-analyzer outputs
 - **Verbatim rendering** — case data fields are rendered exactly as returned by analyzers, never re-interpreted
 - **Automatic depth decisions** — the system decides whether to refine based on result quality (< 3 high-relevance cases) and lead potential (> 3 unexplored citations), not user input
 - **Query type (`fact`/`law`/`mixed`) drives everything** — search strategy, analysis depth, and output format all adapt
+- **Session ID asymmetry**: In interactive commands, `{request_id}` is a template placeholder filled with the generated REQ-... string. In `research-email.md`, `${REQUEST_ID}` is a bash env var used directly — there is no `{request_id}` placeholder in email mode.
 - **Non-interactive commands**: Omit `AskUserQuestion` from `allowed-tools` frontmatter to enforce non-interactive mode
 - **HTML output sequencing**: `run_quote_validation.py:190` derives HTML path by string-replacing `-state.json` → `-results.html` on the state path. Sequence must be: `generate_html.py` → `run_quote_validation.py --annotate` (in-place) → `cp` to delivery path. Never copy before annotation.
+- **HTML is email-targeted**: No `<details>` elements, no CSS `::after` pseudo-elements, no `border-radius` on containers. Maintain email compatibility when modifying `generate_html.py`.
 
 ### Agent Contracts
 
@@ -61,7 +63,7 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 | `case-analyzer` | inherit | Single cluster_id + query context | Deep analysis adapted to query type |
 | `answer-writer` | inherit | `/tmp/answer_writer_input.json` (top-10 analyzed cases with `_id` + `case_map`) | Per-sentence prose with `[C1]` identifiers → `/tmp/answer_writer_output.txt` |
 
-**`case-analyzer.md` schema changes**: Two locations must stay in sync — the JSON example block (~line 57) and the CRITICAL field names list (~line 105). Also check `scripts/generate_html.py`'s `normalize_case()` function for migration shims referencing the changed field, and scan inline text (e.g., the `context_match` absent-case note) for field name cross-references.
+**`case-analyzer.md` schema changes**: Two locations must stay in sync — the JSON example block (~line 57) and the CRITICAL field names list (~line 105). Also check `scripts/generate_html.py`'s `normalize_case()` and `render_authority_entry()` functions for field references, and scan inline text (e.g., absent-case notes) for field name cross-references.
 
 ### Scripts
 

@@ -186,7 +186,7 @@ def main():
     # Step 3: Annotate HTML if requested
     annotated = False
     if do_annotate:
-        search_id = state.get("search_id", "")
+        request_id = state.get("request_id", "")
         html_path = state_path.replace("-state.json", "-results.html")
         if os.path.exists(html_path):
             annotated = run_annotator(html_path, all_results)

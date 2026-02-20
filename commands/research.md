@@ -12,7 +12,7 @@ You are conducting systematic legal research using the CourtListener case law da
 
 The state file is the primary data store. Your context is ephemeral.
 
-- **The state file (`research-{search_id}-state.json`) is the single source of truth.** Full subagent results go there, not in context.
+- **The state file (`research-{request_id}-state.json`) is the single source of truth.** Full subagent results go there, not in context.
 - **After each phase**, write results to state immediately via `manage_state.py`.
 - **In context, retain only summaries**: counts, top candidate names/scores, cluster_id lists.
 - **Run `/compact` between phases.**
@@ -44,15 +44,19 @@ Do not attempt to work around this check or continue the workflow.
 
 ---
 
-## Search ID & File Naming
+## Request ID & File Naming
 
-At the start of Phase 0, generate a Search ID:
-1. Take 2-3 meaningful words from the query (skip stop words). Lowercase, join with hyphens.
-2. Append `-DDSS` (zero-padded day + seconds of current time).
+At the start of Phase 0, generate a Request ID:
 
-Files: `research-{search_id}-state.json` and `research-{search_id}-results.html`
+```bash
+python3 -c "import secrets, datetime; print('REQ-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(2))"
+```
 
-Tell the user the Search ID and file names.
+Store the output as `{request_id}`.
+
+Files: `research-{request_id}-state.json` and `research-{request_id}-results.html`
+
+Tell the user the Request ID and file names.
 
 ---
 
@@ -98,7 +102,7 @@ Show the parsed query table to the user. Write the initial state file:
 
 ```json
 {
-  "search_id": "...",
+  "request_id": "REQ-YYYYMMDD-HHMMSS-XXXX",
   "parsed_query": { "legal_questions": [], "fact_pattern": "", "jurisdiction": "", "date_range": {}, "constraints": [], "query_type": "", "depth_preference": "", "original_input": "$ARGUMENTS", "required_legal_context": { "party_relationship": null, "legal_predicate": null, "applicable_test": null } },
   "workflow_mode": null,
   "search_strategies": [],
@@ -137,7 +141,7 @@ After all agents return:
 
 1. For each agent's results, write the JSON to a temp file and run:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
    ```
 2. Add an `iteration_log` entry for round 1.
 3. Display a round 1 report: queries executed, result counts, top 5-8 candidates.
@@ -146,7 +150,7 @@ After all agents return:
 
 **Session notes**: Log notable conditions using:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "..."
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{request_id}-state.json --message "..."
 ```
 Log a note when you observe: low total case count (< 10), unexpectedly narrow or broad results, the `query_type` inference was non-obvious, or any other pattern worth capturing for later review.
 
@@ -156,7 +160,7 @@ Log a note when you observe: low total case count (< 10), unexpectedly narrow or
 
 Select the top 8-12 cases for analysis. Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json top-candidates 12
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json top-candidates 12
 ```
 
 Prioritize: highest initial_relevance, highest cite_count, court variety, recency. Analyze generously — each analyzer runs in its own context, writes to state, and costs no orchestrator context.
@@ -169,7 +173,7 @@ After all agents return:
 
 1. For each agent's result, write it to a temp file and run:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-analysis /tmp/analysis_{cluster_id}.json
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-analysis /tmp/analysis_{cluster_id}.json
    ```
    This also auto-extracts follow-up leads into `pending_leads`.
 
@@ -188,7 +192,7 @@ Run:
 ```bash
 python3 -c "
 import json, sys
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-{request_id}-state.json'))
 pivotal = []
 seen = set()
 for case in state.get('analyzed_cases', []):
@@ -198,7 +202,7 @@ for case in state.get('analyzed_cases', []):
         seen.add(pc['name'])
 if pivotal:
     state['pivotal_cases'] = pivotal
-    json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+    json.dump(state, open('research-{request_id}-state.json', 'w'), indent=2)
     print(json.dumps(pivotal))
 else:
     print('[]')
@@ -223,7 +227,7 @@ If no pivotal cases are found, no log entry is needed.
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json should-refine
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json should-refine
 ```
 
 The script returns a JSON decision:
@@ -248,7 +252,7 @@ High-relevance cases: [N] | Unexplored leads: [N]
 
 Log the depth decision as a session note:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "Depth decision: [refine|skip] — [reason from script]"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{request_id}-state.json --message "Depth decision: [refine|skip] — [reason from script]"
 ```
 
 Set `workflow_mode` in the state file (`"deep"` if refining, `"quick"` if skipping).
@@ -266,7 +270,7 @@ Perform at least one refinement round. This phase uses prior results to drive ne
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json get-leads
 ```
 
 This returns unexplored citation leads and search terms that emerged from analyzed cases but haven't been searched yet.
@@ -291,8 +295,8 @@ Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Launch 
 
 Run both checks (N = current round number, e.g., 2 for the first refinement round):
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json check-diminishing-returns --round N
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json check-diminishing-returns --round N
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json get-leads
 ```
 
 Log the decision:
@@ -307,7 +311,7 @@ Overlap: [X]% of new cases already analyzed | Unexplored leads: [N]
 
 Mark explored terms and cluster_ids:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json mark-explored /tmp/explored.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json mark-explored /tmp/explored.json
 ```
 
 Log refinement results: new terms discovered, strategy productivity, new cases found and analyzed.
@@ -324,7 +328,7 @@ Run `/compact` before Phase 5.
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json summary
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json summary
 ```
 
 Display the summary to the user: total queries, total cases, analyzed count, relevance distribution.
@@ -336,7 +340,7 @@ Display the summary to the user: total queries, total cases, analyzed count, rel
 ```bash
 python3 -c "
 import json
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-{request_id}-state.json'))
 analyzed = sorted(state.get('analyzed_cases', []),
                   key=lambda x: x.get('relevance_ranking', 0), reverse=True)[:10]
 mapping = {f'C{i+1}': {'cluster_id': c['cluster_id'],
@@ -365,33 +369,33 @@ python3 -c "
 import json
 raw = open('/tmp/answer_writer_output.txt').read().strip()
 mapping = json.load(open('/tmp/answer_writer_map.json'))
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-{request_id}-state.json'))
 state['summary_answer_raw'] = raw
 state['summary_answer_map'] = mapping
-json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+json.dump(state, open('research-{request_id}-state.json', 'w'), indent=2)
 "
 ```
 
 **Step D — Resolve citations:**
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json resolve-citations
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json resolve-citations
 ```
 
 ### Step 3: Generate HTML report
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{search_id}-state.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{request_id}-state.json
 ```
 
-This reads the state file and produces `research-{search_id}-results.html` with all sections: About, Index, Query, Summary, Authorities, All Results, Search Process. All case data is rendered verbatim from the state file.
+This reads the state file and produces `research-{request_id}-results.html` with all sections: About, Index, Query, Summary, Authorities, All Results, Search Process. All case data is rendered verbatim from the state file.
 
 ### Step 4: Quote validation
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{search_id}-state.json --annotate
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{request_id}-state.json --annotate
 ```
 
 This script:
@@ -408,15 +412,16 @@ Display the quote validation summary to the user.
 ### Step 5: Write session log
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode interactive --output-file "$(pwd)/research-{search_id}-results.html"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{request_id}-state.json --log-file ./legal-research-sessions.jsonl --mode interactive --output-file "$(pwd)/research-{request_id}-results.html"
 ```
 
 ### Step 6: Present results
 
 ```
-Results saved to: research-{search_id}-results.html (open in browser)
-State saved to: research-{search_id}-state.json
-To expand: /legal-research:research-continue {search_id} "<refinement direction>"
+Request ID: {request_id}
+Results saved to: research-{request_id}-results.html (open in browser)
+State saved to: research-{request_id}-state.json
+To expand: /legal-research:research-continue {request_id} "<refinement direction>"
 ```
 
 ---

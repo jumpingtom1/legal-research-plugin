@@ -26,7 +26,7 @@ if not token:
 req = Request(API_URL, headers={"Authorization": f"Token {token}"})
 
 try:
-    with urlopen(req, timeout=15) as resp:
+    with urlopen(req, timeout=30) as resp:
         if resp.status == 200:
             print("PASS: CourtListener API is available.")
             sys.exit(0)
@@ -56,7 +56,7 @@ except HTTPError as exc:
 except URLError as exc:
     reason = str(exc.reason)
     if "timed out" in reason.lower():
-        print("ERROR: CourtListener API timed out after 15 seconds.")
+        print("ERROR: CourtListener API timed out after 30 seconds.")
         print("       Check your network connectivity.")
     else:
         print(f"ERROR: Cannot connect to CourtListener API: {reason}")

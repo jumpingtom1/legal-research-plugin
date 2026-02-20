@@ -1,6 +1,6 @@
 ---
 description: "Continue or refine an existing legal research session"
-argument-hint: "<search_id> <refinement direction or additional question>"
+argument-hint: "<request_id> <refinement direction or additional question>"
 allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
 ---
 
@@ -36,22 +36,22 @@ Do not attempt to work around this check or continue the workflow.
 
 ## Step 1: Parse Arguments and Load State
 
-The first token in `$ARGUMENTS` is the **Search ID**. Everything after it is the **refinement direction**.
+The first token in `$ARGUMENTS` is the **Request ID**. Everything after it is the **refinement direction**.
 
-Example: `statute-limitations-0452 focus on Washington appellate courts`
+Example: `REQ-20260220-143022-a3f1 focus on Washington appellate courts`
 
-**If no Search ID is provided**, inform the user:
+**If no Request ID is provided**, inform the user:
 ```
-ERROR: A Search ID is required.
-Usage: /legal-research:research-continue <search_id> <refinement direction>
-To find your Search ID, check the top of your results HTML file or look for research-*-state.json files.
+ERROR: A Request ID is required.
+Usage: /legal-research:research-continue <request_id> <refinement direction>
+To find your Request ID, check the top of your results HTML file or look for research-REQ-*-state.json files.
 ```
 
-**Load** `research-{search_id}-state.json`. If it doesn't exist, tell the user and stop.
+**Load** `research-{request_id}-state.json`. If it doesn't exist, tell the user and stop.
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json summary
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json summary
 ```
 
 Display the session summary to the user: original query, query type, workflow mode, rounds completed, cases found/analyzed, relevance breakdown, pending leads.
@@ -76,7 +76,7 @@ If previous session was quick mode (`workflow_mode === "quick"`): the natural co
 
 Present your plan briefly before proceeding. Log the continuation strategy as a session note:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "research-continue: [brief description of continuation strategy]"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{request_id}-state.json --message "research-continue: [brief description of continuation strategy]"
 ```
 
 ---
@@ -90,13 +90,13 @@ Follow the same patterns as the main research command:
 
 If a case-searcher agent returns `"error": "API_FAILURE"`, log it:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "research-continue Step 3"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{request_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "research-continue Step 3"
 ```
 
 Merge all results via `manage_state.py`:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_results.json --round N
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-analysis /tmp/analysis_results.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-searches /tmp/searcher_results.json --round N
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-analysis /tmp/analysis_results.json
 ```
 
 Update `workflow_mode` to `"deep"` if transitioning from quick mode.
@@ -116,7 +116,7 @@ Log progress: queries executed, results, case selections, analysis findings.
 ```bash
 python3 -c "
 import json
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-{request_id}-state.json'))
 analyzed = sorted(state.get('analyzed_cases', []),
                   key=lambda x: x.get('relevance_ranking', 0), reverse=True)[:10]
 mapping = {f'C{i+1}': {'cluster_id': c['cluster_id'],
@@ -145,24 +145,24 @@ python3 -c "
 import json
 raw = open('/tmp/answer_writer_output.txt').read().strip()
 mapping = json.load(open('/tmp/answer_writer_map.json'))
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-{request_id}-state.json'))
 state['summary_answer_raw'] = raw
 state['summary_answer_map'] = mapping
-json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+json.dump(state, open('research-{request_id}-state.json', 'w'), indent=2)
 "
 ```
 
 **Step D — Resolve citations:**
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json resolve-citations
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json resolve-citations
 ```
 
 ### Step 4b: Generate HTML and validate quotes
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{search_id}-state.json
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{search_id}-state.json --annotate
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{request_id}-state.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{request_id}-state.json --annotate
 ```
 
 If quote validation reports missing opinion files, launch re-fetch agents (minimal prompt, fetch and save only), then rerun validation.
@@ -172,7 +172,7 @@ If quote validation reports missing opinion files, launch re-fetch agents (minim
 ## Step 5: Write session log and present results
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode continue --output-file "$(pwd)/research-{search_id}-results.html"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{request_id}-state.json --log-file ./legal-research-sessions.jsonl --mode continue --output-file "$(pwd)/research-{request_id}-results.html"
 ```
 
 Highlight what changed from the previous session:
@@ -181,9 +181,9 @@ Highlight what changed from the previous session:
 - If transitioning from quick to deep: "Expanded initial results with [N] additional rounds and [N] new cases analyzed."
 
 ```
-Updated results: research-{search_id}-results.html (open in browser)
-Updated state: research-{search_id}-state.json
-To continue: /legal-research:research-continue {search_id} "<direction>"
+Updated results: research-{request_id}-results.html (open in browser)
+Updated state: research-{request_id}-state.json
+To continue: /legal-research:research-continue {request_id} "<direction>"
 ```
 
 ---

@@ -16,16 +16,16 @@ def save_state(path, state):
 
 
 def normalize_excerpts(case):
-    """Normalize excerpts from a case dict into a list of {text, context} dicts.
+    """Normalize excerpts from a case dict into a list of {text} dicts.
 
     Handles both field names ("key_excerpts" and "excerpts") and both formats
-    (plain strings and dicts with "text"/"context" keys).
+    (plain strings and dicts with a "text" key).
     """
     raw = case.get("key_excerpts") or case.get("excerpts") or []
     normalized = []
     for ex in raw:
         if isinstance(ex, str):
-            normalized.append({"text": ex, "context": ""})
+            normalized.append({"text": ex})
         elif isinstance(ex, dict):
-            normalized.append({"text": ex.get("text", ""), "context": ex.get("context", "")})
+            normalized.append({"text": ex.get("text", "")})
     return normalized

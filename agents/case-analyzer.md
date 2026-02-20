@@ -71,13 +71,11 @@ Return your analysis as a single JSON object. **Use these EXACT field names — 
   ],
   "key_excerpts": [
     {
-      "text": "A 2-3 sentence passage from the opinion that is particularly relevant...",
-      "context": "Where in the opinion this appears and why it matters"
+      "text": "A 2-3 sentence passage from the opinion that is particularly relevant..."
     }
   ],
   "relevance_ranking": 5,
   "relevance_summary": "This case establishes that the three-year limitations period under the CPA begins running on the date of discovery, not the date of injury, resolving a circuit split on the issue.",
-  "ranking_explanation": "This case directly addresses the exact scenario in the research question...",
   "position": "supports",
   "context_match": "full | partial | absent | n/a",
   "follow_up": {
@@ -105,14 +103,13 @@ Return your analysis as a single JSON object. **Use these EXACT field names — 
 
 **CRITICAL — exact field names required:**
 - `bluebook_citation` — NOT `citation`, NOT `cite`
-- `key_excerpts` — NOT `excerpts`, NOT `quotes`. Each element MUST be `{"text": "...", "context": "..."}`, NOT a plain string.
+- `key_excerpts` — NOT `excerpts`, NOT `quotes`. Each element MUST be `{"text": "..."}`, NOT a plain string.
 - `issues_presented` — NOT `holding`, NOT `key_reasoning`, NOT `issues`
-- `relevance_summary` — NOT `summary`, NOT `relevance_description`. A 1-2 sentence plain-language description of this case's substantive contribution to the research question. This differs from `ranking_explanation` (which explains the numeric score) — `relevance_summary` describes *what* the case establishes or decides that matters.
-- `ranking_explanation` — NOT `analysis_notes`, NOT `explanation`. **If the case pre-dates a pivotal authority that established the controlling rule on the research question, note that this case is pre-pivotal and reduce relevance accordingly.**
+- `relevance_summary` — NOT `summary`, NOT `relevance_description`. A 1-2 sentence plain-language description of this case's substantive contribution to the research question. Describes *what* the case establishes or decides that matters. **If the case pre-dates the pivotal authority that established the controlling rule, state that here and note its limited precedential weight.**
 - `context_match` — **Required.** Evaluate against `required_legal_context` from the parsed_query:
   - `"full"`: the case involves the same party relationship, legal predicate, or applicable test as specified in `required_legal_context`
   - `"partial"`: some but not all `required_legal_context` elements match
-  - `"absent"`: the case involves a fundamentally different relationship or predicate (e.g., a tort case when `required_legal_context.party_relationship` specifies contracting parties). Flag this in `ranking_explanation` and reduce `relevance_ranking` by 1-2 points. **Do not let a strong doctrinal holding override a fundamental context mismatch.**
+  - `"absent"`: the case involves a fundamentally different relationship or predicate (e.g., a tort case when `required_legal_context.party_relationship` specifies contracting parties). Flag this in `relevance_summary` and reduce `relevance_ranking` by 1-2 points. **Do not let a strong doctrinal holding override a fundamental context mismatch.**
   - `"n/a"`: no `required_legal_context` was specified (all fields null)
 - `pivotal_case` — **Optional field.** If the opinion identifies a single case as the one that established the controlling rule on the research question, populate this field. Otherwise, **omit it entirely** — do not include a null or empty object. The `cluster_id` sub-field may be null if unknown; `name` must be Bluebook format; `rule_adopted` is a brief statement of the rule; `note` describes the pre-pivotal implication.
 
@@ -173,6 +170,5 @@ ANALYZING: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)
 Keep returned JSON compact to avoid exhausting context:
 - **`key_excerpts`**: Limit to **3 excerpts maximum**. Choose the three most relevant passages.
 - **`factual_background`**: For law queries, enforce the one-sentence limit strictly. For mixed queries, cap at 3-4 sentences.
-- **`relevance_summary`**: Cap at **2 sentences maximum**. Focus on the case's substantive contribution, not the numeric score.
-- **`ranking_explanation`**: Cap at **2 sentences maximum**.
+- **`relevance_summary`**: Cap at **2 sentences maximum**. Cover the case's substantive contribution and, if applicable, its pre-pivotal status.
 - **`follow_up`**: Limit each sub-array (`related_opinions`, `cases_to_examine`, `pacer_documents`, `other_leads`) to **3 items maximum**. Prioritize the most actionable leads.

@@ -12,7 +12,7 @@ You are conducting systematic legal research triggered by an incoming email. Thi
 
 The state file is the primary data store. Your context is ephemeral.
 
-- **The state file (`research-{search_id}-state.json`) is the single source of truth.** Full subagent results go there, not in context.
+- **The state file (`research-${REQUEST_ID}-state.json`) is the single source of truth.** Full subagent results go there, not in context.
 - **After each phase**, write results to state immediately via `manage_state.py`.
 - **In context, retain only summaries**: counts, top candidate names/scores, cluster_id lists.
 - **Run `/compact` between phases.**
@@ -94,18 +94,6 @@ Parse the JSON response the agent returns.
 
 ---
 
-## Search ID & File Naming
-
-At the start of Phase 0, generate a Search ID:
-1. Take 2-3 meaningful words from `RESEARCH_QUERY` (skip stop words). Lowercase, join with hyphens.
-2. Append `-DDSS` (zero-padded day + seconds of current time).
-
-Files: `research-{search_id}-state.json` and `research-{search_id}-results.html`
-
-Log the Search ID and file names to stdout.
-
----
-
 ## Phase 0: Structured Query Decomposition
 
 Parse `RESEARCH_QUERY` into structured elements. Apply these **non-interactive defaults** automatically — never ask the user:
@@ -134,7 +122,6 @@ Log the parsed query table to stdout. Write the initial state file with the two 
 
 ```json
 {
-  "search_id": "...",
   "email_mode": true,
   "request_id": "${REQUEST_ID}",
   "parsed_query": { "legal_questions": [], "fact_pattern": "", "jurisdiction": "", "date_range": {}, "constraints": [], "query_type": "", "depth_preference": "deep", "original_input": "[RESEARCH_QUERY]", "required_legal_context": { "party_relationship": null, "legal_predicate": null, "applicable_test": null } },
@@ -179,19 +166,19 @@ After all agents return:
 ```
 Then run:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "Phase 2"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "Phase 2"
 ```
 
 If **every** searcher returned `API_FAILURE`, run:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{search_id}-state.json --level fatal --message "All searchers returned API_FAILURE — research halted" --phase "Phase 2"
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode email
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level fatal --message "All searchers returned API_FAILURE — research halted" --phase "Phase 2"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-${REQUEST_ID}-state.json --log-file ./legal-research-sessions.jsonl --mode email
 ```
 Then write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
 
 1. For each agent's results (excluding `API_FAILURE`), write the JSON to a temp file and run:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
    ```
 2. Add an `iteration_log` entry for round 1.
 3. Log a round 1 report to stdout: queries executed, result counts, top 5-8 candidates.
@@ -204,7 +191,7 @@ Then write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and 
 
 Select the top 8-12 cases for analysis. Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json top-candidates 12
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json top-candidates 12
 ```
 
 Prioritize: highest initial_relevance, highest cite_count, court variety, recency.
@@ -217,7 +204,7 @@ After all agents return:
 
 1. For each agent's result, write it to a temp file and run:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json add-analysis /tmp/analysis_{cluster_id}.json
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json add-analysis /tmp/analysis_{cluster_id}.json
    ```
    This also auto-extracts follow-up leads into `pending_leads`.
 
@@ -236,7 +223,7 @@ Run:
 ```bash
 python3 -c "
 import json, sys
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-${REQUEST_ID}-state.json'))
 pivotal = []
 seen = set()
 for case in state.get('analyzed_cases', []):
@@ -246,7 +233,7 @@ for case in state.get('analyzed_cases', []):
         seen.add(pc['name'])
 if pivotal:
     state['pivotal_cases'] = pivotal
-    json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+    json.dump(state, open('research-${REQUEST_ID}-state.json', 'w'), indent=2)
     print(json.dumps(pivotal))
 else:
     print('[]')
@@ -267,7 +254,7 @@ Cases pre-dating [year] will be deprioritized in subsequent rounds.
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json should-refine
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json should-refine
 ```
 
 The script returns a JSON decision:
@@ -284,7 +271,7 @@ High-relevance cases: [N] | Unexplored leads: [N]
 
 Log the depth decision as a session note:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{search_id}-state.json --message "Depth decision: refine — [reason from script]"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Depth decision: refine — [reason from script]"
 ```
 
 Set `workflow_mode` to `"deep"` in the state file. Proceed to Phase 4.
@@ -299,7 +286,7 @@ Perform at least one refinement round. This phase uses prior results to drive ne
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json get-leads
 ```
 
 This returns unexplored citation leads and search terms that emerged from analyzed cases but haven't been searched yet.
@@ -324,8 +311,8 @@ Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Launch 
 
 Run both checks (N = current round number, e.g., 2 for the first refinement round):
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json check-diminishing-returns --round N
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json get-leads
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json check-diminishing-returns --round N
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json get-leads
 ```
 
 Log the decision:
@@ -340,7 +327,7 @@ Overlap: [X]% of new cases already analyzed | Unexplored leads: [N]
 
 Mark explored terms and cluster_ids:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json mark-explored /tmp/explored.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json mark-explored /tmp/explored.json
 ```
 
 Log refinement results to stdout: new terms discovered, strategy productivity, new cases found and analyzed.
@@ -357,7 +344,7 @@ Run `/compact` before Phase 5.
 
 Run:
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json summary
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json summary
 ```
 
 Log the summary to stdout: total queries, total cases, analyzed count, relevance distribution.
@@ -369,7 +356,7 @@ Log the summary to stdout: total queries, total cases, analyzed count, relevance
 ```bash
 python3 -c "
 import json
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-${REQUEST_ID}-state.json'))
 analyzed = sorted(state.get('analyzed_cases', []),
                   key=lambda x: x.get('relevance_ranking', 0), reverse=True)[:10]
 mapping = {f'C{i+1}': {'cluster_id': c['cluster_id'],
@@ -398,33 +385,33 @@ python3 -c "
 import json
 raw = open('/tmp/answer_writer_output.txt').read().strip()
 mapping = json.load(open('/tmp/answer_writer_map.json'))
-state = json.load(open('research-{search_id}-state.json'))
+state = json.load(open('research-${REQUEST_ID}-state.json'))
 state['summary_answer_raw'] = raw
 state['summary_answer_map'] = mapping
-json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+json.dump(state, open('research-${REQUEST_ID}-state.json', 'w'), indent=2)
 "
 ```
 
 **Step D — Resolve citations:**
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json resolve-citations
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json resolve-citations
 ```
 
 ### Step 3: Generate local HTML
 
 Run (no output path argument — script derives it from state path):
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{search_id}-state.json
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-${REQUEST_ID}-state.json
 ```
 
-This produces `research-{search_id}-results.html` in the current working directory (`email-queries/`).
+This produces `research-${REQUEST_ID}-results.html` in the current working directory (`email-queries/`).
 
 ### Step 4: Run quote validation
 
 Run (annotates the local HTML in-place):
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{search_id}-state.json --annotate
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-${REQUEST_ID}-state.json --annotate
 ```
 
 This script checks opinion text files, runs the three-tier matcher, and annotates the HTML with verification labels.
@@ -436,7 +423,7 @@ Log the quote validation summary to stdout.
 ### Step 5: Write session log
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-{search_id}-state.json --log-file ./legal-research-sessions.jsonl --mode email --output-file "/tmp/gmail-monitor/result-${REQUEST_ID}.html"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-${REQUEST_ID}-state.json --log-file ./legal-research-sessions.jsonl --mode email --output-file "/tmp/gmail-monitor/result-${REQUEST_ID}.html"
 ```
 
 ### Step 6: Copy annotated result to delivery path
@@ -444,10 +431,10 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file resear
 Verify the local HTML exists, then copy:
 ```bash
 mkdir -p /tmp/gmail-monitor
-cp research-{search_id}-results.html /tmp/gmail-monitor/result-${REQUEST_ID}.html
+cp research-${REQUEST_ID}-results.html /tmp/gmail-monitor/result-${REQUEST_ID}.html
 ```
 
-If `research-{search_id}-results.html` does not exist (generate_html.py failed), write a minimal error HTML to the result path instead:
+If `research-${REQUEST_ID}-results.html` does not exist (generate_html.py failed), write a minimal error HTML to the result path instead:
 ```html
 <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Research Error</title></head>
 <body><h1>Legal Research: Report Generation Failed</h1>
@@ -459,8 +446,8 @@ If `research-{search_id}-results.html` does not exist (generate_html.py failed),
 
 ```
 Email research complete.
-Request: ${REQUEST_ID} | Search: {search_id}
-State: email-queries/research-{search_id}-state.json
+Request ID: ${REQUEST_ID}
+State: email-queries/research-${REQUEST_ID}-state.json
 Result: /tmp/gmail-monitor/result-${REQUEST_ID}.html
 ```
 
