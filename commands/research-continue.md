@@ -107,7 +107,58 @@ Log progress: queries executed, results, case selections, analysis findings.
 
 ## Step 4: Generate Output
 
-**Do NOT compose HTML manually.** Use the scripts:
+**Do NOT compose HTML manually.** Use the scripts.
+
+### Step 4a: Generate Summary Answer
+
+**Step A — Build input payload:**
+
+```bash
+python3 -c "
+import json
+state = json.load(open('research-{search_id}-state.json'))
+analyzed = sorted(state.get('analyzed_cases', []),
+                  key=lambda x: x.get('relevance_ranking', 0), reverse=True)[:10]
+mapping = {f'C{i+1}': {'cluster_id': c['cluster_id'],
+                        'bluebook_citation': c.get('bluebook_citation', ''),
+                        'case_name': c.get('case_name', '')}
+           for i, c in enumerate(analyzed)}
+payload = {
+    'user_query': state['parsed_query']['original_input'],
+    'case_map': mapping,
+    'cases': [{**c, '_id': f'C{i+1}'} for i, c in enumerate(analyzed)]
+}
+json.dump(payload, open('/tmp/answer_writer_input.json', 'w'), indent=2)
+json.dump(mapping, open('/tmp/answer_writer_map.json', 'w'), indent=2)
+"
+```
+
+**Step B — Launch answer-writer agent:**
+
+Launch one **answer-writer** agent. Pass it this prompt:
+> Read `/tmp/answer_writer_input.json` and follow the agent instructions.
+
+**Step C — Store raw result and mapping in state:**
+
+```bash
+python3 -c "
+import json
+raw = open('/tmp/answer_writer_output.txt').read().strip()
+mapping = json.load(open('/tmp/answer_writer_map.json'))
+state = json.load(open('research-{search_id}-state.json'))
+state['summary_answer_raw'] = raw
+state['summary_answer_map'] = mapping
+json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+"
+```
+
+**Step D — Resolve citations:**
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json resolve-citations
+```
+
+### Step 4b: Generate HTML and validate quotes
 
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{search_id}-state.json

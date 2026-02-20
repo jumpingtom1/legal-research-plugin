@@ -375,6 +375,27 @@ def cmd_mark_explored(state, args):
     print(json.dumps({"terms_marked": len(terms), "cluster_ids_marked": len(cluster_ids)}))
 
 
+def cmd_resolve_citations(state, args):
+    """Replace [C1][C2] identifier runs in summary_answer_raw with Bluebook citations."""
+    import re
+
+    raw = state.get("summary_answer_raw", "")
+    mapping = state.get("summary_answer_map", {})
+    if not raw or not mapping:
+        print(json.dumps({"error": "missing summary_answer_raw or summary_answer_map"}))
+        return
+
+    def replace_run(m):
+        ids = re.findall(r'C(\d+)', m.group(0))
+        citations = [mapping[f'C{n}']["bluebook_citation"]
+                     for n in ids if f'C{n}' in mapping]
+        return "; ".join(citations) if citations else m.group(0)
+
+    resolved = re.sub(r'(?:\[C\d+\])+', replace_run, raw)
+    state["summary_answer"] = resolved
+    print(json.dumps({"ok": True, "length": len(resolved)}))
+
+
 def cmd_check_diminishing_returns(state, args):
     """Check if the latest search round returned mostly already-analyzed cases.
 
@@ -443,6 +464,8 @@ def main():
     p_dr = subparsers.add_parser("check-diminishing-returns")
     p_dr.add_argument("--round", type=int, required=True, help="Round number to check")
 
+    subparsers.add_parser("resolve-citations")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -461,6 +484,7 @@ def main():
         "add-leads": cmd_add_leads,
         "mark-explored": cmd_mark_explored,
         "check-diminishing-returns": cmd_check_diminishing_returns,
+        "resolve-citations": cmd_resolve_citations,
     }
 
     handler = cmd_map[args.command]

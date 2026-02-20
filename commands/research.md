@@ -329,28 +329,54 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_i
 
 Display the summary to the user: total queries, total cases, analyzed count, relevance distribution.
 
-### Step 2: Compose Summary Answer prose
+### Step 2: Generate Summary Answer
 
-The Summary Answer needs a prose paragraph synthesizing the key findings. This requires LLM composition — it cannot be assembled mechanically.
+**Step A — Build input payload:**
 
-1. Read the state file. Identify all analyzed cases with `relevance_ranking` >= 3.
-2. Compose a single prose paragraph (4-8 sentences) that:
-   - **Directly answers the user's research question** — lead with the answer, not a description of the research
-   - **Cites the 3-5 most important cases** by name and Bluebook citation
-   - **Draws on each case's `relevance_summary` and `issues_presented` holdings** — do not add new analysis beyond what the case-analyzers found
-   - **Notes any split in authority** or unresolved questions across the cases
-   - **Uses Bluebook citation format** throughout (e.g., _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020))
-3. Write the paragraph to the state file under `summary_answer` using:
-   ```
-   python3 -c "
-   import json, sys
-   state = json.load(open('research-{search_id}-state.json'))
-   state['summary_answer'] = sys.stdin.read().strip()
-   json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
-   " <<'SUMMARY_EOF'
-   [your composed paragraph here]
-   SUMMARY_EOF
-   ```
+```bash
+python3 -c "
+import json
+state = json.load(open('research-{search_id}-state.json'))
+analyzed = sorted(state.get('analyzed_cases', []),
+                  key=lambda x: x.get('relevance_ranking', 0), reverse=True)[:10]
+mapping = {f'C{i+1}': {'cluster_id': c['cluster_id'],
+                        'bluebook_citation': c.get('bluebook_citation', ''),
+                        'case_name': c.get('case_name', '')}
+           for i, c in enumerate(analyzed)}
+payload = {
+    'user_query': state['parsed_query']['original_input'],
+    'case_map': mapping,
+    'cases': [{**c, '_id': f'C{i+1}'} for i, c in enumerate(analyzed)]
+}
+json.dump(payload, open('/tmp/answer_writer_input.json', 'w'), indent=2)
+json.dump(mapping, open('/tmp/answer_writer_map.json', 'w'), indent=2)
+"
+```
+
+**Step B — Launch answer-writer agent:**
+
+Launch one **answer-writer** agent. Pass it this prompt:
+> Read `/tmp/answer_writer_input.json` and follow the agent instructions.
+
+**Step C — Store raw result and mapping in state:**
+
+```bash
+python3 -c "
+import json
+raw = open('/tmp/answer_writer_output.txt').read().strip()
+mapping = json.load(open('/tmp/answer_writer_map.json'))
+state = json.load(open('research-{search_id}-state.json'))
+state['summary_answer_raw'] = raw
+state['summary_answer_map'] = mapping
+json.dump(state, open('research-{search_id}-state.json', 'w'), indent=2)
+"
+```
+
+**Step D — Resolve citations:**
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{search_id}-state.json resolve-citations
+```
 
 ### Step 3: Generate HTML report
 

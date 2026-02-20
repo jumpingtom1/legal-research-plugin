@@ -39,7 +39,7 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 4. **Phase 3 — Deep Case Analysis**: 8-12 `agents/case-analyzer.md` launched in parallel (one case per agent, 3 excerpts each)
 5. **Phase 3.5 — Automatic Depth Decision**: `scripts/manage_state.py should-refine` decides whether to iterate based on result quality and unexplored leads — no user checkpoint
 6. **Phase 4 — Iterative Refinement** (if triggered): Additional search rounds using new terminology and citation tracing, driven by `manage_state.py get-leads`
-7. **Phase 5 — Output**: `scripts/generate_html.py` assembles HTML from state file; `scripts/run_quote_validation.py` verifies all quotations
+7. **Phase 5 — Output**: `agents/answer-writer.md` composes summary answer with per-sentence `[C1]` citations; `manage_state.py resolve-citations` resolves identifiers to Bluebook text; `scripts/generate_html.py` assembles HTML; `scripts/run_quote_validation.py` verifies quotations
 
 ### Key Design Principles
 
@@ -59,13 +59,16 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 | `query-analyst` | haiku | Structured parsed_query | Array of search strategies |
 | `case-searcher` | inherit | Search strategies + tool access | Deduplicated case results with metadata |
 | `case-analyzer` | inherit | Single cluster_id + query context | Deep analysis adapted to query type |
+| `answer-writer` | inherit | `/tmp/answer_writer_input.json` (top-10 analyzed cases with `_id` + `case_map`) | Per-sentence prose with `[C1]` identifiers → `/tmp/answer_writer_output.txt` |
+
+**`case-analyzer.md` schema changes**: Two locations must stay in sync — the JSON example block (~line 57) and the CRITICAL field names list (~line 105). Also check `scripts/generate_html.py`'s `normalize_case()` function for migration shims referencing the changed field, and scan inline text (e.g., the `context_match` absent-case note) for field name cross-references.
 
 ### Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/generate_html.py` | Reads state file, produces complete HTML report |
-| `scripts/manage_state.py` | State file operations: add-searches, add-analysis, get-leads, top-candidates, summary, should-refine, mark-explored |
+| `scripts/manage_state.py` | State file operations: add-searches, add-analysis, get-leads, top-candidates, summary, should-refine, mark-explored, resolve-citations |
 | `scripts/log_session.py` | Session logging: `error` and `note` write to `session_log` in state; `summary` assembles and appends one record to `legal-research-sessions.jsonl` |
 | `scripts/run_quote_validation.py` | Orchestrates quote validation: checks opinion files, runs matcher, annotates HTML |
 | `scripts/vq_matcher.py` | Three-tier quote matching (normalized substring → token sequence → fuzzy) |
@@ -77,6 +80,8 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 **Script dependency convention**: Scripts in `scripts/` use Python stdlib only — no external packages. (`httpx` is available only inside `mcp-server/` via `uv`.) Use `urllib.request` for HTTP, not `httpx`.
 
 **`session_log` state structure**: `{"started_at": "ISO-timestamp-or-null", "errors": [], "notes": []}`. `started_at` is set on the first `error` or `note` call — orchestrators should emit a note early (Phase 1/2) to capture a meaningful start time.
+
+**`summary_answer` state fields**: `summary_answer_raw` — agent output with `[C1]` identifiers (audit trail); `summary_answer_map` — `"C1"` → `{cluster_id, bluebook_citation, case_name}`; `summary_answer` — final resolved text (read by `generate_html.py`).
 | `scripts/vq_annotator.py` | Annotates HTML blockquotes with validation labels |
 | `scripts/state_io.py` | Shared I/O utilities: `load_state`, `save_state`, `normalize_excerpts` — imported by all three main scripts |
 | `scripts/preflight.py` | Hard-stop preflight: checks `COURTLISTENER_API_TOKEN` and pings API; exits 0 (PASS) or 1 (FAIL). Run before any MCP calls. |
@@ -114,6 +119,7 @@ agents/
   case-searcher.md              # CourtListener search execution
   case-analyzer.md              # Individual case deep analysis
   email-query-extractor.md      # Haiku sanitizer: extracts query from email, rejects prompt injection
+  answer-writer.md              # Summary answer: per-sentence [C1] citations resolved to Bluebook by resolve-citations
 plugin-wrapper.sh               # Shell entry point called by gmail-monitor (must be chmod +x, always exits 0)
 email-queries/                  # Runtime dir (created by plugin-wrapper.sh); email state/HTML files land here
 skills/
