@@ -1,5 +1,6 @@
 """CourtListener MCP Server — search case law by citation, keyword, or semantic text."""
 
+import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
@@ -32,7 +33,7 @@ async def app_lifespan(app: FastMCP) -> AsyncIterator[AppContext]:
     headers = {"Authorization": f"Token {API_TOKEN}"} if API_TOKEN else {}
     async with httpx.AsyncClient(
         headers=headers,
-        timeout=httpx.Timeout(30.0),
+        timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
         limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
     ) as client:
         yield AppContext(client=client)
@@ -63,35 +64,44 @@ def _get_client(ctx: Context) -> httpx.AsyncClient:
     return ctx.request_context.lifespan_context.client
 
 
+_RETRY_DELAYS = [0, 4, 8]  # seconds before attempt 1, 2, 3
+
+
 async def api_request(
     client: httpx.AsyncClient,
     method: str,
     url: str,
     **kwargs,
 ) -> dict | list | str:
-    """Make an API request with standardised error handling.
+    """Make an API request with standardised error handling and retry on transient errors.
 
     Returns parsed JSON (dict or list) on success, or an error string.
     """
     if not API_TOKEN:
         return "Error: COURTLISTENER_API_TOKEN environment variable is not set."
-    try:
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response.json()
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code
-        if code == 401:
-            return "Error: Invalid API token. Check COURTLISTENER_API_TOKEN."
-        if code == 429:
-            return "Error: Rate limit exceeded. CourtListener allows 5,000 requests/day."
-        if code == 404:
-            return "Error: Resource not found."
-        return f"Error: HTTP {code} — {exc.response.text[:300]}"
-    except httpx.TimeoutException:
-        return "Error: Request timed out after 30 seconds."
-    except httpx.RequestError as exc:
-        return f"Error: Connection failed — {exc}"
+
+    last_error: Exception | None = None
+    for attempt, delay in enumerate(_RETRY_DELAYS, 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            response = await client.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            # Authoritative HTTP errors — don't retry
+            code = exc.response.status_code
+            if code == 401:
+                return "Error: Invalid API token. Check COURTLISTENER_API_TOKEN."
+            if code == 429:
+                return "Error: Rate limit exceeded. CourtListener allows 5,000 requests/hour for authenticated users."
+            if code == 404:
+                return "Error: Resource not found."
+            return f"Error: HTTP {code} — {exc.response.text[:300]}"
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
+            last_error = exc
+
+    return f"Error: Request failed after {len(_RETRY_DELAYS)} attempts — {last_error}"
 
 
 def format_search_results(data: dict, header: str) -> str:

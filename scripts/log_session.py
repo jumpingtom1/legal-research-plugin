@@ -58,8 +58,15 @@ def cmd_note(state, args):
     if "started_at" not in sl:
         sl["started_at"] = _now()
 
-    sl["notes"].append(args.message)
+    sl["notes"].append({"ts": _now(), "msg": args.message})
     print(json.dumps({"logged": "note", "message": args.message}))
+
+
+def _render_note(n):
+    """Render a note entry as a human-readable string (handles both old plain strings and new dicts)."""
+    if isinstance(n, dict):
+        return f"[{n.get('ts', '')}] {n.get('msg', '')}"
+    return str(n)  # backward compat for plain-string notes
 
 
 def cmd_summary(state, args):

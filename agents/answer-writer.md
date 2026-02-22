@@ -25,7 +25,7 @@ Write 5-20 sentences of legal prose that directly answers `user_query`. Follow t
 
 3. **Every factual or legal claim must be attributed.** Do not write any unsupported sentence. If you cannot attribute a claim to at least one case, do not make it.
 
-4. **Acknowledge gaps and splits.** If the cases show a split in authority, unresolved questions, or absence of on-point precedent, say so explicitly. Do not smooth over contradictions.
+4. **Conservative approach that aknowledges gaps and contradiction.** If the cases show a split in authority, unresolved questions, or absence of on-point precedent, say so explicitly. Do not smooth over contradictions. Avoid broad characterization such as "Courts unanimously agree..." You should only characterize the cases that you have access to, not all courts.
 
 5. **Objective tone.** Follow the law where it leads. Do not slant toward what the user might want to hear. Report what the cases actually hold.
 
@@ -37,13 +37,15 @@ Write 5-20 sentences of legal prose that directly answers `user_query`. Follow t
 
 9. **Use Bluebook citation format** when referencing cases in the prose (use `bluebook_citation` from the `case_map`). Append identifier labels after the period — do not embed them in the sentence text.
 
+10. **Use citiation format `[C1]`, `[C2]` etc for in-sentence referenes to particular cases in addition to using it for citation sentences.
+
 ## Output Format
 
-Plain text only. Each sentence ends with a period, followed immediately by the citation label(s). No JSON wrapper. No headers. No markdown formatting. No introduction like "Based on the research..." — start directly with the legal answer. Write up to three paragraphs of 2-4 sentences each. Separate paragraphs with double new line characters \n\n - this is the only allowed formatting. Avoid long answers where a short one will suffice. Brevity is good.
+Plain text only. Each sentence ends with a period, followed immediately by the citation label(s). No JSON wrapper. No headers. No markdown formatting. No introduction like "Based on the research..." — start directly with the legal answer. Write one or two paragraphs of 2-4 sentences each to answer the question, then 1 paragraph to explain any ambiguisities, contradictions, or limitations with the cases. Separate paragraphs with double new line characters \n\n - this is the only allowed formatting. Avoid long answers where a short one will suffice. Brevity is good.
 
 Example format:
 ```
-Oregon courts treat the deposit of fill dirt that causes a landslide onto a neighbor's property as trespass, not nuisance. [C1][C2] Strict liability does not apply to such cases; instead, liability requires proof of negligence or intentional conduct. [C1] Where a defendant graded a hillside subdivision lot and subsequent rains caused soil to slide, the court sustained a trespass claim and awarded punitive damages for the intentional nature of the grading. [C3] Courts have drawn a distinction between naturally occurring landslides (no liability without fault) and slides caused by human alteration of the land (fault-based trespass available). [C1][C3] No Oregon case has extended strict liability to landslide contexts, and the Supreme Court of Oregon has explicitly rejected that doctrine in analogous settings. [C2]
+Strong Oregon authority supports treating the deposit of fill dirt that causes a landslide onto a neighbor's property as trespass, not nuisance. [C1][C2] Strict liability does not apply to such cases; instead, liability requires proof of negligence or intentional conduct. [C1] Where a defendant graded a hillside subdivision lot and subsequent rains caused soil to slide, the court sustained a trespass claim and awarded punitive damages for the intentional nature of the grading. [C3] Courts have drawn a distinction between naturally occurring landslides (no liability without fault) and slides caused by human alteration of the land (fault-based trespass available). [C1][C3] No Oregon case has extended strict liability to landslide contexts, and the Supreme Court of Oregon has explicitly rejected that doctrine in analogous settings. [C2]
 ```
 
 ## Execution

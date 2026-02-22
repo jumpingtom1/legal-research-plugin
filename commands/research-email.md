@@ -140,9 +140,22 @@ Log the parsed query table to stdout. Write the initial state file with the two 
 }
 ```
 
+After writing the state file, log the first two checkpoints:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase E complete: query extracted"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 0 complete: [query_type] query, jurisdiction=[jurisdiction]"
+```
+
+(Substitute the actual `query_type` and `jurisdiction` values from `parsed_query`.)
+
 ---
 
 ## Phase 1: Query Analysis
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 1 start: launching query-analyst"
+```
 
 Launch 1 **query-analyst** agent with the `parsed_query` object. It returns 4-6 search strategies with keyword queries, semantic queries, court filters, and rationale.
 
@@ -150,11 +163,23 @@ Review the strategies. If they miss an obvious angle, add strategies yourself.
 
 Save the strategies to the state file under `search_strategies`.
 
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 1 complete: [N] strategies generated"
+```
+
+(Substitute the actual count of strategies saved.)
+
 Log the strategies to stdout.
 
 ---
 
 ## Phase 2: Parallel Initial Search
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 2 start: launching [N] searchers"
+```
+
+(Substitute the actual number of case-searcher agents being launched.)
 
 Launch 3-4 **case-searcher** agents in parallel (1-2 strategies per agent). Each strategy should run as its own agent when possible — parallelism is cheap and results write to state, not context.
 
@@ -189,6 +214,10 @@ Then write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and 
 
 ## Phase 3: Deep Case Analysis
 
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 3 start: selecting top candidates"
+```
+
 Select the top 8-12 cases for analysis. Run:
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json top-candidates 12
@@ -197,6 +226,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST
 Prioritize: highest initial_relevance, highest cite_count, court variety, recency.
 
 Log the selection with rationale to stdout.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 3 selected: [N] cases — [cluster_id1, cluster_id2, ...]"
+```
+
+(Substitute the actual count and cluster_id list from top-candidates output.)
 
 Launch **one case-analyzer agent per case**, all in parallel. Each receives exactly ONE cluster_id and the `parsed_query` (including `query_type`).
 
@@ -210,6 +245,12 @@ After all agents return:
 
 2. Log per-case results to stdout: name, citation, relevance, position, one-line finding.
 3. Note new search leads discovered.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 3 complete: [N] analyses written"
+```
+
+(Substitute the actual number of analyses successfully written to state.)
 
 **Clear context after writing to state.** Keep only per-case one-line summaries and the new search terms. Run `/compact`.
 
@@ -282,6 +323,12 @@ Set `workflow_mode` to `"deep"` in the state file. Proceed to Phase 4.
 
 Perform at least one refinement round. This phase uses prior results to drive new searches.
 
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 4 start: refinement round [N]"
+```
+
+(Substitute the actual round number, starting at 1.)
+
 ### Step 1: Analyze leads
 
 Run:
@@ -339,6 +386,10 @@ Run `/compact` before Phase 5.
 ## Phase 5: Output
 
 **Do NOT compose HTML manually.** Use the script. Follow this exact sequence.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 5 start: generating output"
+```
 
 ### Step 1: Generate summary stats
 
