@@ -1,7 +1,7 @@
 ---
 name: case-analyzer
 description: Reads and deeply analyzes court opinions for relevance to a legal research question. Extracts factual background, holdings, dicta, and follow-up leads. Use when analyzing full case text.
-tools: mcp__plugin_legal_research_courtlistener__get_case_text, Write
+tools: Read
 model: inherit
 ---
 
@@ -41,14 +41,22 @@ Both facts and legal analysis matter. Produce the full analysis as specified in 
 
 ## Your Process
 
-1. **Retrieve the full opinion text** using `mcp__plugin_legal_research_courtlistener__get_case_text` with the cluster_id (use max_characters=50000)
-2. **Save the raw opinion text** to `/tmp/vq_opinion_{cluster_id}.txt` using the Write tool. This is used by the quote validation phase later — do this immediately after retrieval, before any analysis.
-3. **Read the opinion carefully**, identifying all material relevant to the research question
-4. **Apply the analysis mode** based on the `query_type` you received:
+0. **Check the pre-fetched opinion file**: Verify that `/tmp/vq_opinion_{cluster_id}.txt` (substitute the actual cluster_id) exists and contains at least 500 characters. Use the Read tool to check. If the file is missing or too short, return IMMEDIATELY with no further analysis:
+   ```json
+   {"error": "opinion_file_missing", "cluster_id": 12345, "message": "Opinion text was not pre-fetched. Analysis aborted."}
+   ```
+   Do not attempt to proceed or work around this. The orchestrator will log and skip this case.
+
+1. **Read the pre-fetched opinion text** from `/tmp/vq_opinion_{cluster_id}.txt` using the Read tool.
+
+2. **Read the opinion carefully**, identifying all material relevant to the research question
+
+3. **Apply the analysis mode** based on the `query_type` you received:
    - Fact queries: Focus on extracting factual detail
    - Law queries: Focus on extracting legal reasoning and holdings/dicta
    - Mixed queries: Full extraction of both
-5. **Extract structured analysis** as described below
+
+4. **Extract structured analysis** as described below
 
 ## What You Must Return
 
@@ -60,6 +68,7 @@ Return your analysis as a single JSON object. **Use these EXACT field names — 
   "case_name": "Smith v. Jones",
   "bluebook_citation": "_Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)",
   "url": "https://www.courtlistener.com/opinion/12345/smith-v-jones/",
+  // Use the url value provided in your prompt (from fetch_case_text.py metadata). Do not construct or guess URLs.
   "factual_background": "For fact queries: detailed narrative. For law queries: one sentence. For mixed: concise but complete.",
   "factual_outcome": "FACT QUERIES ONLY. e.g., 'Jury found for plaintiff; $150K damages.' Omit this field for law queries.",
   "issues_presented": [
@@ -140,7 +149,7 @@ Report your findings for the case using this format:
 ```
 ANALYZING: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)
   Analysis mode: [fact / law / mixed]
-  Text retrieved: 38,450 characters [complete]
+  Text read from file: 38,450 characters [complete]
   Procedural posture: Appeal from district court's denial of summary judgment on qualified immunity
   Relevant issues found: 3 (2 holdings, 1 dicta)    [for law/mixed queries]
   Factual match quality: Strong — nearly identical scenario  [for fact queries]
@@ -151,13 +160,13 @@ ANALYZING: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)
 ```
 
 **Important logging rules:**
-- If the opinion text is **truncated** (hit the 50,000 character limit), note this prominently: `Text retrieved: 50,000 characters [TRUNCATED — full opinion not captured]`
+- If the opinion text is **truncated** (hit the 50,000 character limit), note this prominently: `Text read from file: 50,000 characters [TRUNCATED — full opinion not captured]`
 - If the case turns out to be **less relevant than expected** (relevance drops from initial score), explain why: "Initially scored 4 based on snippet; after full read, the discussion of [topic] was dicta only — revised to 2"
 - If you discover **important cited cases** not yet in the research, highlight them: `⚠ Key authority discovered: _Alpha v. Beta_, 400 F.3d 50 — cited as controlling precedent, NOT yet in search results`
 
 ## Critical Instructions
 
-- **MANDATORY: Save the raw opinion text to `/tmp/vq_opinion_{cluster_id}.txt` (Step 2).** This MUST happen before you begin analysis. The file must contain the complete raw text returned by `get_case_text` — not a summary, not a placeholder, not a truncated version. If the Write tool fails, retry once. This file is consumed by a downstream quote validation script; if it is missing or incomplete, quote validation fails for the entire case.
+- **Opinion text is pre-fetched**: The file `/tmp/vq_opinion_{cluster_id}.txt` was written by `fetch_case_text.py` before this agent runs. Your Step 0 verifies it exists. Do not attempt to fetch the opinion via any other means — only use the Read tool.
 - **For law and mixed queries: Be precise about holding vs. dicta.** If the court discusses a legal principle but does not need it to resolve the case, that is dicta. Label it as such. This distinction affects the precedential weight of the material. (For fact queries, this distinction is less critical — a brief label is sufficient.)
 - **Identify ALL relevant material**, not just the primary issue. For law queries: secondary holdings and dicta may be directly relevant. For fact queries: secondary factual details may strengthen the match.
 - **Extract meaningful excerpts**: For law queries, choose passages with key reasoning. For fact queries, choose passages describing the factual scenario. 2-3 sentences with enough context to be useful.

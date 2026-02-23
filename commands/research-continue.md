@@ -1,7 +1,7 @@
 ---
 description: "Continue or refine an existing legal research session"
 argument-hint: "<request_id> <refinement direction or additional question>"
-allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
+allowed-tools: Task, Read, Write, Bash, AskUserQuestion, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__find_citing_cases
 ---
 
 # Continue Legal Research
@@ -83,21 +83,68 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-
 
 ## Step 3: Execute Additional Research
 
-Follow the same patterns as the main research command:
-- Launch **case-searcher** agents for new strategies
-- Launch **case-analyzer** agents for new cases (one per case, pass `query_type`)
-- Use **find_citing_cases** for citation tracing
+**Searching**: For new search strategies, write each to `/tmp/strategy_{strategy_id}.json` and run `search_api.py` in parallel:
 
-If a case-searcher agent returns `"error": "API_FAILURE"`, log it:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{request_id}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "research-continue Step 3"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/search_api.py /tmp/strategy_{strategy_id}.json > /tmp/search_raw_{strategy_id}.json &
+# (one line per strategy)
+wait
 ```
 
-Merge all results via `manage_state.py`:
+Check each output for `{"error": ...}`. Log failures via `log_session.py` (level `warn`). For successful results:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
+  add-searches /tmp/search_raw_{strategy_id}.json --round N
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-searches /tmp/searcher_results.json --round N
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json add-analysis /tmp/analysis_results.json
+
+Log search batch performance (list all output files from this round):
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-search \
+  --state-file research-{request_id}-state.json --phase "research-continue" \
+  /tmp/search_raw_{strategy_id}.json [...]
 ```
+
+After merging new cases: launch ONE **case-scorer** agent (model: haiku, tools: none) for new cases only. Pass the research question, the new cases list (cluster_id, case_name, court, date_filed, cite_count, snippet), and the names/scores of existing analyzed cases for calibration. Write the agent's JSON array output to `/tmp/case_scores.json`. Merge scores:
+```bash
+python3 -c "
+import json, sys
+from pathlib import Path
+sys.path.insert(0, '${CLAUDE_PLUGIN_ROOT}/scripts')
+from state_io import load_state, save_state
+scores = {s['cluster_id']: s for s in json.load(open('/tmp/case_scores.json'))}
+state = load_state('research-{request_id}-state.json')
+for case in state.get('cases_table', []):
+    cid = case.get('cluster_id')
+    if cid in scores:
+        case['initial_relevance'] = scores[cid]['initial_relevance']
+        case['relevance_note'] = scores[cid]['relevance_note']
+save_state('research-{request_id}-state.json', state)
+print('Scores merged:', len(scores))
+"
+```
+
+**Analysis**: For new cases to analyze, pre-fetch opinion text in parallel using `fetch_case_text.py`:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id} > /tmp/fetch_{cluster_id}.json &
+# (one line per case)
+wait
+```
+
+Log fetch batch performance:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-fetch \
+  --state-file research-{request_id}-state.json --phase "research-continue" \
+  /tmp/fetch_{cluster_id}.json [...]
+```
+
+Check each fetch result. For successful fetches (`"error": null`), launch one **case-analyzer** agent per case in parallel. Pass `cluster_id`, `url: "https://www.courtlistener.com{absolute_url}"` (from fetch metadata), `case_name`, `date_filed`, `parsed_query` (including `query_type`). For each valid analysis result: write to `/tmp/analysis_{cluster_id}.json` and run:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
+  add-analysis /tmp/analysis_{cluster_id}.json
+```
+
+**Citation tracing**: Use `mcp__plugin_legal_research_courtlistener__find_citing_cases` and `mcp__plugin_legal_research_courtlistener__lookup_citation` for citation-based leads (these MCP tools are available in the orchestrator context).
 
 Update `workflow_mode` to `"deep"` if transitioning from quick mode.
 
@@ -165,7 +212,10 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate_html.py research-{request_id}-sta
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-{request_id}-state.json --annotate
 ```
 
-If quote validation reports missing opinion files, launch re-fetch agents (minimal prompt, fetch and save only), then rerun validation.
+If quote validation reports missing opinion files, run `fetch_case_text.py` for each missing cluster_id, then rerun validation:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id} > /tmp/fetch_{cluster_id}.json
+```
 
 ---
 

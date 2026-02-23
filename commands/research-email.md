@@ -1,7 +1,7 @@
 ---
 description: "Non-interactive legal research triggered by incoming email. Reads email body from /tmp/gmail-monitor/req-${REQUEST_ID}.txt. Never pauses for user input."
 argument-hint: "(no arguments — reads REQUEST_ID from environment)"
-allowed-tools: Task, Read, Write, Bash, mcp__plugin_legal_research_courtlistener__search_cases, mcp__plugin_legal_research_courtlistener__semantic_search, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__get_case_text, mcp__plugin_legal_research_courtlistener__find_citing_cases
+allowed-tools: Task, Read, Write, Bash, mcp__plugin_legal_research_courtlistener__lookup_citation, mcp__plugin_legal_research_courtlistener__find_citing_cases
 ---
 
 # Email-Triggered Legal Research
@@ -136,7 +136,7 @@ Log the parsed query table to stdout. Write the initial state file with the two 
   "explored_cluster_ids": [],
   "explored_terms": [],
   "pivotal_cases": [],
-  "session_log": {"errors": [], "notes": []}
+  "session_log": {"errors": [], "notes": [], "events": []}
 }
 ```
 
@@ -176,37 +176,76 @@ Log the strategies to stdout.
 ## Phase 2: Parallel Initial Search
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 2 start: launching [N] searchers"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 2 start: launching searches for [N] strategies"
 ```
 
-(Substitute the actual number of case-searcher agents being launched.)
+(Substitute the actual number of strategies.)
 
-Launch 3-4 **case-searcher** agents in parallel (1-2 strategies per agent). Each strategy should run as its own agent when possible — parallelism is cheap and results write to state, not context.
+For each search strategy, write its JSON to `/tmp/strategy_{strategy_id}.json`. Launch all searches in parallel using `search_api.py`:
 
-After all agents return:
-
-**Before writing searcher results to state**, check each agent's returned JSON for `"error": "API_FAILURE"`. If present, skip that result and log:
-```
-⚠ Searcher for strategy {strategy_id}: API_FAILURE — no valid API response received. Excluded.
-```
-Then run:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level warn --message "strategy-{strategy_id}: API_FAILURE" --phase "Phase 2"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/search_api.py /tmp/strategy_S1.json > /tmp/search_raw_S1.json &
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/search_api.py /tmp/strategy_S2.json > /tmp/search_raw_S2.json &
+# (one line per strategy)
+wait
 ```
 
-If **every** searcher returned `API_FAILURE`, run:
+**Check each output file for errors.** Read `/tmp/search_raw_{strategy_id}.json`:
+- If it contains `{"error": ...}`: log to stdout and run:
+  ```bash
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level warn --message "strategy-{strategy_id}: search failed — {error}" --phase "Phase 2"
+  ```
+- If **ALL** strategies failed:
+  ```bash
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level fatal --message "All searches failed — research halted" --phase "Phase 2"
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-${REQUEST_ID}-state.json --log-file ./legal-research-sessions.jsonl --mode email
+  ```
+  Write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
+
+For each successful result, run:
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-${REQUEST_ID}-state.json --level fatal --message "All searchers returned API_FAILURE — research halted" --phase "Phase 2"
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py summary --state-file research-${REQUEST_ID}-state.json --log-file ./legal-research-sessions.jsonl --mode email
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json \
+  add-searches /tmp/search_raw_{strategy_id}.json --round 1
 ```
-Then write the error HTML to `/tmp/gmail-monitor/result-${REQUEST_ID}.html` and stop.
 
-1. For each agent's results (excluding `API_FAILURE`), write the JSON to a temp file and run:
-   ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json add-searches /tmp/searcher_{strategy_id}.json --round 1
-   ```
-2. Add an `iteration_log` entry for round 1.
-3. Log a round 1 report to stdout: queries executed, result counts, top 5-8 candidates.
+**Log search batch performance.** After all `add-searches` calls complete:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-search \
+  --state-file research-${REQUEST_ID}-state.json --phase "Phase 2" \
+  /tmp/search_raw_S1.json [/tmp/search_raw_S2.json ...]
+```
+
+List all `/tmp/search_raw_{strategy_id}.json` files from this batch (include both succeeded and failed).
+
+**Score new cases.** Read the current `cases_table` from the state file. Launch ONE **case-scorer** agent (model: haiku, tools: none) with:
+
+> Research question: [paste `parsed_query.original_input`]
+>
+> Score the following cases for relevance. Return ONLY a JSON array — no preamble, no code fences.
+>
+> Cases: [paste cases_table entries as JSON array with: cluster_id, case_name, court, date_filed, cite_count, snippet]
+
+Write the agent's output to `/tmp/case_scores.json`. Merge:
+```bash
+python3 -c "
+import json, sys
+from pathlib import Path
+sys.path.insert(0, '${CLAUDE_PLUGIN_ROOT}/scripts')
+from state_io import load_state, save_state
+scores = {s['cluster_id']: s for s in json.load(open('/tmp/case_scores.json'))}
+state = load_state('research-${REQUEST_ID}-state.json')
+for case in state.get('cases_table', []):
+    cid = case.get('cluster_id')
+    if cid in scores:
+        case['initial_relevance'] = scores[cid]['initial_relevance']
+        case['relevance_note'] = scores[cid]['relevance_note']
+save_state('research-${REQUEST_ID}-state.json', state)
+print('Scores merged:', len(scores))
+"
+```
+
+Add an `iteration_log` entry for round 1. Log a round 1 report to stdout: queries executed, result counts, top 5-8 candidates.
 
 **After writing to state, clear context.** Keep only: total case count, top candidate names/cluster_ids, and the list of cluster_ids for Phase 3. Run `/compact`.
 
@@ -219,29 +258,53 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-
 ```
 
 Select the top 8-12 cases for analysis. Run:
-```
+```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json top-candidates 12
 ```
 
-Prioritize: highest initial_relevance, highest cite_count, court variety, recency.
-
-Log the selection with rationale to stdout.
+Prioritize: highest initial_relevance, highest cite_count, court variety, recency. Log the selection with rationale to stdout.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 3 selected: [N] cases — [cluster_id1, cluster_id2, ...]"
 ```
 
-(Substitute the actual count and cluster_id list from top-candidates output.)
+**Pre-fetch opinion text in parallel.** For each selected cluster_id:
 
-Launch **one case-analyzer agent per case**, all in parallel. Each receives exactly ONE cluster_id and the `parsed_query` (including `query_type`).
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id_1} > /tmp/fetch_{cluster_id_1}.json &
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id_2} > /tmp/fetch_{cluster_id_2}.json &
+# (one line per case)
+wait
+```
+
+Read each `/tmp/fetch_{cluster_id}.json`:
+- **Success** (`"error": null`): add to `fetch_ok` list with `{cluster_id, case_name, date_filed, absolute_url, truncated}`
+- **Failure**: log via `log_session.py` (level `warn`) and skip
+
+**Log fetch batch performance:**
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-fetch \
+  --state-file research-${REQUEST_ID}-state.json --phase "Phase 3" \
+  /tmp/fetch_{cluster_id_1}.json [/tmp/fetch_{cluster_id_2}.json ...]
+```
+
+For each case in `fetch_ok`, launch **one case-analyzer agent** in parallel. Pass:
+- `cluster_id`
+- `url: "https://www.courtlistener.com{absolute_url}"` (from fetch metadata)
+- `case_name`, `date_filed` (from fetch metadata)
+- `parsed_query` (including `query_type`)
+- Instruction: "Read `/tmp/vq_opinion_{cluster_id}.txt`. If missing or fewer than 500 characters, return the error JSON immediately."
 
 After all agents return:
 
-1. For each agent's result, write it to a temp file and run:
-   ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json add-analysis /tmp/analysis_{cluster_id}.json
-   ```
-   This also auto-extracts follow-up leads into `pending_leads`.
+1. For each result:
+   - If `{"error": "opinion_file_missing", ...}`: log via `log_session.py` (level `warn`) and skip.
+   - If valid analysis: write to `/tmp/analysis_{cluster_id}.json` and run:
+     ```bash
+     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json \
+       add-analysis /tmp/analysis_{cluster_id}.json
+     ```
 
 2. Log per-case results to stdout: name, citation, relevance, position, one-line finding.
 3. Note new search leads discovered.
@@ -249,8 +312,6 @@ After all agents return:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-${REQUEST_ID}-state.json --message "Phase 3 complete: [N] analyses written"
 ```
-
-(Substitute the actual number of analyses successfully written to state.)
 
 **Clear context after writing to state.** Keep only per-case one-line summaries and the new search terms. Run `/compact`.
 
@@ -348,11 +409,31 @@ Based on the leads:
 
 ### Step 3: Execute searches
 
-Launch **case-searcher** agents with refined strategies. Merge results via `manage_state.py add-searches --round 2`.
+Write each refined strategy to `/tmp/strategy_{strategy_id}.json`. Launch all `search_api.py` processes in parallel (same pattern as Phase 2), outputting to `/tmp/search_raw_{strategy_id}.json`. After `wait`, check for errors (log failures). For successful results:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-${REQUEST_ID}-state.json \
+  add-searches /tmp/search_raw_{strategy_id}.json --round 2
+```
+
+Log search batch performance (list all output files from this round):
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-search \
+  --state-file research-${REQUEST_ID}-state.json --phase "Phase 4" \
+  /tmp/search_raw_{strategy_id}.json [...]
+```
+
+After merging new cases: identify new cluster_ids (not yet scored). Launch ONE **case-scorer** agent for new cases only, passing the research question, new cases list, and existing analyzed-case names/scores for calibration. Write output to `/tmp/case_scores.json` and merge into state using the same python snippet as Phase 2.
 
 ### Step 4: Analyze new finds
 
-Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Launch **case-analyzer** agents for the top 5-8. Merge via `manage_state.py add-analysis`.
+Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Pre-fetch opinion text in parallel using `fetch_case_text.py` for each candidate (same pattern as Phase 3). Log fetch batch performance after the `wait`:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-fetch \
+  --state-file research-${REQUEST_ID}-state.json --phase "Phase 4" \
+  /tmp/fetch_{cluster_id}.json [...]
+```
+Launch **case-analyzer** agents for the top 5-8 cases that fetched successfully. Merge via `manage_state.py add-analysis`.
 
 ### Step 5: Check for another round
 
@@ -467,7 +548,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_quote_validation.py research-${REQUEST
 
 This script checks opinion text files, runs the three-tier matcher, and annotates the HTML with verification labels.
 
-If the script reports missing opinion files, launch **one case-analyzer agent per missing file** with a minimal prompt: "Fetch the opinion text for cluster_id {id} using `get_case_text` with `max_characters: 50000` and save it to `/tmp/vq_opinion_{id}.txt` using the Write tool. Return the file size. Do NOT analyze the case." Then rerun the validation script.
+If the script reports missing opinion files, run `fetch_case_text.py` for each missing cluster_id:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id} > /tmp/fetch_{cluster_id}.json
+```
+Then rerun the validation script.
 
 Log the quote validation summary to stdout.
 

@@ -27,9 +27,10 @@ if not token:
     print("       See CLAUDE.md for setup instructions.")
     sys.exit(1)
 
-req = Request(API_URL, headers={"Authorization": f"Token {token}"})
+_RETRYABLE_HTTP_CODES = {502, 503, 504}
 
 for attempt in range(1, MAX_RETRIES + 1):
+    req = Request(API_URL, headers={"Authorization": f"Token {token}"})
     try:
         with urlopen(req, timeout=30) as resp:
             if resp.status == 200:
@@ -39,7 +40,15 @@ for attempt in range(1, MAX_RETRIES + 1):
                 print(f"ERROR: CourtListener API returned HTTP {resp.status} (expected 200).")
                 sys.exit(1)
     except HTTPError as exc:
-        # HTTPErrors are authoritative — don't retry
+        if exc.code in _RETRYABLE_HTTP_CODES:
+            if attempt < MAX_RETRIES:
+                print(f"[retry {attempt}/{MAX_RETRIES - 1}] CourtListener API returned HTTP {exc.code}, retrying in {RETRY_DELAY}s...", file=sys.stderr)
+                time.sleep(RETRY_DELAY)
+                continue
+            # All retries exhausted for 5xx
+            print(f"ERROR: CourtListener API returned HTTP {exc.code} after {MAX_RETRIES} attempts.")
+            sys.exit(1)
+        # Non-retryable HTTP errors — authoritative, fail immediately
         if exc.code == 401:
             print("ERROR: CourtListener API token is invalid (HTTP 401 Unauthorized).")
             print("       Check that COURTLISTENER_API_TOKEN is set to a valid token.")

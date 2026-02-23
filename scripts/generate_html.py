@@ -247,7 +247,8 @@ def render_authority_entry(case):
     relevance_summary = e(case.get("relevance_summary", ""))
 
     issues_html = _render_issues(case.get("issues_presented", [])[:1])
-    excerpts_html = _render_excerpts(case.get("key_excerpts", []))
+    key_excerpts = case.get("key_excerpts", [])
+    excerpts_html = _render_excerpts(key_excerpts[:1])
 
     link_html = f'<a href="{url}">CourtListener</a>' if url else ""
 
@@ -292,19 +293,16 @@ def section_all_results(state):
 
         name = e(c.get("case_name", ""))
         cite = e(ac.get("bluebook_citation", c.get("bluebook_citation", "")))
-        url = e(ac.get("url", c.get("url", "")))
-        link_html = f'<a href="{url}">View</a>' if url else "&mdash;"
-        relevance_note = e(c.get("relevance_note", ""))
-        score = ac.get("relevance_ranking", c.get("initial_relevance", 0))
+        relevance_note = e(c.get("relevance_note", "") or ac.get("relevance_summary", ""))
+        score = c.get("initial_relevance", 0)
 
         rows.append(
             f"<tr>"
             f"<td>{i}</td>"
             f"<td><em>{name}</em></td>"
             f"<td>{cite}</td>"
-            f"<td>{link_html}</td>"
             f"<td>{relevance_note}</td>"
-            f'<td><span class="relevance relevance-{score}">{score}</span></td>'
+            f'<td><span class="relevance relevance-{score}">{score}/5</span></td>'
             f"</tr>"
         )
 
@@ -314,7 +312,7 @@ def section_all_results(state):
 <table>
   <thead>
     <tr>
-      <th>#</th><th>Case Name</th><th>Citation</th><th>Link</th><th>Relevance Note</th><th>Score</th>
+      <th>#</th><th>Case Name</th><th>Citation</th><th>Relevance Note</th><th>Score</th>
     </tr>
   </thead>
   <tbody>

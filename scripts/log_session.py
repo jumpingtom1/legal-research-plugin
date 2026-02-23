@@ -31,6 +31,7 @@ def _ensure_session_log(state):
     sl = state.setdefault("session_log", {})
     sl.setdefault("errors", [])
     sl.setdefault("notes", [])
+    sl.setdefault("events", [])
 
 
 def cmd_error(state, args):
@@ -60,6 +61,149 @@ def cmd_note(state, args):
 
     sl["notes"].append({"ts": _now(), "msg": args.message})
     print(json.dumps({"logged": "note", "message": args.message}))
+
+
+def cmd_ingest_search(state, args):
+    """Read search_api.py output files and log a structured search_batch event."""
+    _ensure_session_log(state)
+    sl = state["session_log"]
+    if "started_at" not in sl:
+        sl["started_at"] = _now()
+
+    strategies = []
+    for path in args.files:
+        fpath = Path(path)
+        if not fpath.exists():
+            strategies.append({"file": str(fpath), "error": "file not found"})
+            continue
+        try:
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+        except Exception as exc:
+            strategies.append({"file": str(fpath), "error": f"parse error: {exc}"})
+            continue
+
+        entry = {
+            "strategy_id": data.get("strategy_id"),
+            "cases_found": data.get("total_unique_cases", 0),
+            "elapsed_ms": data.get("total_elapsed_ms"),
+            "retries": data.get("total_retries", 0),
+            "error": data.get("error"),
+            "queries": [],
+        }
+        for s in data.get("searches_executed", []):
+            entry["queries"].append({
+                "type": s.get("type"),
+                "query": (s.get("query") or "")[:80],
+                "result_count": s.get("result_count", 0),
+                "elapsed_ms": s.get("elapsed_ms"),
+                "retries": s.get("retries", 0),
+                "error": s.get("error"),
+            })
+        strategies.append(entry)
+
+    sl["events"].append({
+        "ts": _now(),
+        "type": "search_batch",
+        "phase": args.phase,
+        "strategies": strategies,
+    })
+
+    total_cases = sum(s.get("cases_found", 0) for s in strategies if not s.get("error"))
+    print(json.dumps({
+        "logged": "search_batch",
+        "strategies": len(strategies),
+        "total_cases_found": total_cases,
+    }))
+
+
+def cmd_ingest_fetch(state, args):
+    """Read fetch_case_text.py output files and log a structured fetch_batch event."""
+    _ensure_session_log(state)
+    sl = state["session_log"]
+    if "started_at" not in sl:
+        sl["started_at"] = _now()
+
+    cases = []
+    for path in args.files:
+        fpath = Path(path)
+        if not fpath.exists():
+            cases.append({"file": str(fpath), "error": "file not found"})
+            continue
+        try:
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+        except Exception as exc:
+            cases.append({"file": str(fpath), "error": f"parse error: {exc}"})
+            continue
+
+        cases.append({
+            "cluster_id": data.get("cluster_id"),
+            "case_name": data.get("case_name"),
+            "chars_saved": data.get("chars_saved", 0),
+            "truncated": data.get("truncated", False),
+            "elapsed_ms": data.get("elapsed_ms"),
+            "retries": data.get("total_retries", 0),
+            "error": data.get("error"),
+        })
+
+    succeeded = sum(1 for c in cases if not c.get("error") and c.get("chars_saved", 0) > 0)
+    failed = sum(1 for c in cases if c.get("error"))
+    sl["events"].append({
+        "ts": _now(),
+        "type": "fetch_batch",
+        "phase": args.phase,
+        "attempted": len(cases),
+        "succeeded": succeeded,
+        "failed": failed,
+        "cases": cases,
+    })
+
+    print(json.dumps({
+        "logged": "fetch_batch",
+        "attempted": len(cases),
+        "succeeded": succeeded,
+        "failed": failed,
+    }))
+
+
+def _compute_api_performance(events):
+    """Aggregate API performance metrics from session events."""
+    total_api_ms = 0
+    total_retries = 0
+    fetch_attempted = 0
+    fetch_succeeded = 0
+    search_batches = []
+
+    for event in events:
+        etype = event.get("type")
+        if etype == "search_batch":
+            for s in event.get("strategies", []):
+                if s.get("elapsed_ms"):
+                    total_api_ms += s["elapsed_ms"]
+                total_retries += s.get("retries", 0)
+            search_batches.append({
+                "phase": event.get("phase"),
+                "strategies": len(event.get("strategies", [])),
+                "total_cases": sum(s.get("cases_found", 0) for s in event.get("strategies", []) if not s.get("error")),
+                "elapsed_ms": sum(s.get("elapsed_ms") or 0 for s in event.get("strategies", [])),
+            })
+        elif etype == "fetch_batch":
+            fetch_attempted += event.get("attempted", 0)
+            fetch_succeeded += event.get("succeeded", 0)
+            for c in event.get("cases", []):
+                if c.get("elapsed_ms"):
+                    total_api_ms += c["elapsed_ms"]
+                total_retries += c.get("retries", 0)
+
+    return {
+        "total_api_ms": total_api_ms if total_api_ms > 0 else None,
+        "total_retries": total_retries,
+        "fetch_attempted": fetch_attempted,
+        "fetch_succeeded": fetch_succeeded,
+        "fetch_success_rate": (
+            round(fetch_succeeded / fetch_attempted, 2) if fetch_attempted > 0 else None
+        ),
+        "search_batches": search_batches if search_batches else None,
+    }
 
 
 def _render_note(n):
@@ -122,6 +266,9 @@ def cmd_summary(state, args):
             "not_found": qv_summary.get("not_found", 0),
         }
 
+    events = sl.get("events", [])
+    api_perf = _compute_api_performance(events) if events else None
+
     record = {
         "session_id": state.get("request_id", "unknown"),
         "started_at": started_at,
@@ -154,8 +301,10 @@ def cmd_summary(state, args):
             "pivotal_cases": pivotal_names,
             "quote_validation": quote_val,
         },
+        "api_performance": api_perf,
         "errors": sl.get("errors", []),
         "notes": sl.get("notes", []),
+        "events_count": len(events),
         "output_file": args.output_file,
     }
 
@@ -184,6 +333,16 @@ def main():
     p_note.add_argument("--state-file", required=True, help="Path to state JSON file")
     p_note.add_argument("--message", required=True)
 
+    p_is = subparsers.add_parser("ingest-search", help="Log search_api.py output files as a batch event")
+    p_is.add_argument("--state-file", required=True, help="Path to state JSON file")
+    p_is.add_argument("--phase", default="", help="Phase label (e.g. 'Phase 2')")
+    p_is.add_argument("files", nargs="+", help="Paths to search_api.py output JSON files")
+
+    p_if = subparsers.add_parser("ingest-fetch", help="Log fetch_case_text.py output files as a batch event")
+    p_if.add_argument("--state-file", required=True, help="Path to state JSON file")
+    p_if.add_argument("--phase", default="", help="Phase label (e.g. 'Phase 3')")
+    p_if.add_argument("files", nargs="+", help="Paths to fetch_case_text.py output JSON files")
+
     p_sum = subparsers.add_parser("summary", help="Assemble and append session record to JSONL log")
     p_sum.add_argument("--state-file", required=True, help="Path to state JSON file")
     p_sum.add_argument("--log-file", default="./legal-research-sessions.jsonl",
@@ -206,6 +365,12 @@ def main():
         save_state(args.state_file, state)
     elif args.command == "note":
         cmd_note(state, args)
+        save_state(args.state_file, state)
+    elif args.command == "ingest-search":
+        cmd_ingest_search(state, args)
+        save_state(args.state_file, state)
+    elif args.command == "ingest-fetch":
+        cmd_ingest_fetch(state, args)
         save_state(args.state_file, state)
     elif args.command == "summary":
         cmd_summary(state, args)
