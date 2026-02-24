@@ -3,7 +3,7 @@
 Usage:
     python3 fetch_case_text.py <cluster_id> [--output-dir /tmp]
 
-Writes /tmp/vq_opinion_{cluster_id}.txt (up to 50,000 chars).
+Writes /tmp/vq_opinion_{cluster_id}.txt (up to 300,000 chars).
 Prints JSON to stdout: success metadata or error info.
 Exit 0 on success, 1 on failure.
 
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 BASE_V3 = "https://www.courtlistener.com/api/rest/v3"
 _RETRY_DELAYS = [0, 4, 8]
-_MAX_CHARS = 50000
+_MAX_CHARS = 300000
 
 # HTML fields to try in order when plain_text is absent (mirrors server.py)
 _HTML_FIELDS = [

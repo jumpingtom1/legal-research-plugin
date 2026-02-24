@@ -160,7 +160,7 @@ ANALYZING: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)
 ```
 
 **Important logging rules:**
-- If the opinion text is **truncated** (hit the 50,000 character limit), note this prominently: `Text read from file: 50,000 characters [TRUNCATED — full opinion not captured]`
+- If the opinion text is **truncated** (hit the 300,000 character limit), note this prominently: `Text read from file: 300,000 characters [TRUNCATED — full opinion not captured]`
 - If the case turns out to be **less relevant than expected** (relevance drops from initial score), explain why: "Initially scored 4 based on snippet; after full read, the discussion of [topic] was dicta only — revised to 2"
 - If you discover **important cited cases** not yet in the research, highlight them: `⚠ Key authority discovered: _Alpha v. Beta_, 400 F.3d 50 — cited as controlling precedent, NOT yet in search results`
 
@@ -172,7 +172,7 @@ ANALYZING: _Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)
 - **Extract meaningful excerpts**: For law queries, choose passages with key reasoning. For fact queries, choose passages describing the factual scenario. 2-3 sentences with enough context to be useful.
 - **Follow-up flags are essential**: The most valuable part of deep case analysis is discovering leads for further research. Note every concurrence, dissent, cited case, or referenced document that could advance the research.
 - **Position assessment**: For law queries, "supports" means the case supports the position implied by the research question, "opposes" means it cuts against it, "neutral" means it provides relevant framework. For fact queries, describe the outcome: "plaintiff prevailed", "defendant prevailed", "mixed result", "settled".
-- **If the opinion is truncated** (exceeds 50,000 characters), note this and flag that the full opinion should be reviewed.
+- **If the opinion is truncated** (exceeds 300,000 characters), note this and flag that the full opinion should be reviewed.
 
 ## Output Size Constraints
 

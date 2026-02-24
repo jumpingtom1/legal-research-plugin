@@ -419,6 +419,82 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_
 
 Log refinement results: new terms discovered, strategy productivity, new cases found and analyzed.
 
+Run `/compact` before Phase 4.5.
+
+---
+
+## Phase 4.5: Subsequent History Check
+
+This phase checks all analyzed cases for negative subsequent treatment (reversal, overruling, vacatur, etc.) using CourtListener citation data. It runs regardless of whether refinement occurred.
+
+### Step 1: Gather analyzed cases
+
+Read the state file to get the list of analyzed cases. For each, extract `cluster_id`, `case_name`, `court` (from `cases_table`), and `date_filed`.
+
+```bash
+python3 -c "
+import json
+state = json.load(open('research-{request_id}-state.json'))
+ct_map = {c['cluster_id']: c for c in state.get('cases_table', [])}
+for c in state.get('analyzed_cases', []):
+    cid = c['cluster_id']
+    ct = ct_map.get(cid, {})
+    print(json.dumps({'cluster_id': cid, 'case_name': c.get('case_name',''), 'court': ct.get('court',''), 'date_filed': c.get('date_filed','')}))
+"
+```
+
+### Step 2: Run history queries in parallel
+
+For each analyzed case, launch `check_subsequent_history.py` in parallel:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cid1} --court "{court1}" --date-filed "{date1}" > /tmp/hist_{cid1}.json &
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cid2} --court "{court2}" --date-filed "{date2}" > /tmp/hist_{cid2}.json &
+# (one line per analyzed case)
+wait
+```
+
+Read each `/tmp/hist_{cluster_id}.json`:
+- If `"error"` is non-null: log via `log_session.py` (level `warn`, phase "Phase 4.5") and skip.
+- Otherwise: note the count of `citing_cases`.
+
+**Log history batch performance:**
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-hist \
+  --state-file research-{request_id}-state.json --phase "Phase 4.5" \
+  /tmp/hist_{cid1}.json [/tmp/hist_{cid2}.json ...]
+```
+
+### Step 3: Filter and batch
+
+- Cases with 0 `citing_cases` → no flag possible, skip (no state entry needed)
+- Cases with 1+ `citing_cases` → batch into groups of 4-5 for agent evaluation
+
+### Step 4: Launch history-checker agents in parallel
+
+For each batch of 4-5 cases that have citing cases, launch one **history-checker** agent (model: haiku, tools: none). Pass the batch as a JSON array where each entry includes `cluster_id`, `case_name`, `court`, `date_filed`, and `citing_cases`.
+
+Write each agent's output to `/tmp/hist_checked_batch_{N}.json`.
+
+### Step 5: Merge flagged results
+
+Combine all agent results (only flagged cases — agents omit cases with no negative treatment) into `/tmp/subsequent_history_all.json` as a single JSON array.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
+  add-subsequent-history /tmp/subsequent_history_all.json --cases-checked {total_analyzed_count}
+```
+
+### Step 6: Report to user
+
+Display: total cases checked, cases flagged, and for each flagged case: name, status, detail, confidence.
+
+Log a session note:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{request_id}-state.json --message "Phase 4.5 complete: [N] cases checked, [M] flagged for negative subsequent treatment"
+```
+
 Run `/compact` before Phase 5.
 
 ---

@@ -159,7 +159,7 @@ def main():
             status = mr.get("status", "not_found")
 
             # Reclassify not_found as truncated if opinion was near limit
-            if status == "not_found" and opinion_info["size"] >= 49500:
+            if status == "not_found" and opinion_info["size"] >= 299500:
                 status = "not_found_truncated"
 
             excerpt_text = excerpts[idx].get("text", "") if idx < len(excerpts) else ""

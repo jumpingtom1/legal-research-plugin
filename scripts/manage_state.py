@@ -390,6 +390,19 @@ def cmd_resolve_citations(state, args):
         print(json.dumps({"error": "missing summary_answer_raw or summary_answer_map"}))
         return
 
+    # Build URL lookup from analyzed_cases and cases_table
+    url_map = {}
+    for c in state.get("analyzed_cases", []):
+        cid = c.get("cluster_id")
+        url = c.get("url", "")
+        if cid and url:
+            url_map[cid] = url
+    for c in state.get("cases_table", []):
+        cid = c.get("cluster_id")
+        url = c.get("url", "")
+        if cid and url and cid not in url_map:
+            url_map[cid] = url
+
     def citation_to_html(bc):
         """Convert a Bluebook citation string to HTML, replacing _text_ with <em>text</em>."""
         escaped = html_mod.escape(bc)
@@ -397,9 +410,19 @@ def cmd_resolve_citations(state, args):
 
     def replace_run(m):
         ids = re.findall(r'C(\d+)', m.group(0))
-        citations = [citation_to_html(mapping[f'C{n}']["bluebook_citation"])
-                     for n in ids if f'C{n}' in mapping]
-        return "; ".join(citations) if citations else html_mod.escape(m.group(0))
+        parts = []
+        for n in ids:
+            key = f'C{n}'
+            if key not in mapping:
+                continue
+            entry = mapping[key]
+            cite_html = citation_to_html(entry["bluebook_citation"])
+            cid = entry.get("cluster_id")
+            url = url_map.get(cid, "")
+            if url:
+                cite_html = f'<a href="{html_mod.escape(url)}">{cite_html}</a>'
+            parts.append(cite_html)
+        return "; ".join(parts) if parts else html_mod.escape(m.group(0))
 
     # HTML-escape the prose first, then substitute citation placeholders with HTML citations.
     # [, ], C, and digits are not HTML-special, so the regex still matches after escaping.
@@ -448,6 +471,42 @@ def cmd_check_diminishing_returns(state, args):
     }))
 
 
+def cmd_add_subsequent_history(state, args):
+    """Store flagged subsequent history results in state.
+
+    Input JSON: array of history-checker results (only flagged cases).
+    Stores in state["subsequent_history"] dict keyed by string cluster_id.
+    """
+    with open(args.json_file, "r", encoding="utf-8") as f:
+        flagged = json.load(f)
+
+    if isinstance(flagged, dict):
+        flagged = [flagged]
+
+    total_checked = args.cases_checked if args.cases_checked else 0
+    history = state.setdefault("subsequent_history", {})
+
+    added = 0
+    for entry in flagged:
+        cid = entry.get("cluster_id")
+        if not cid:
+            continue
+        cid_str = str(cid)
+        history[cid_str] = {
+            "precedential_status": entry.get("precedential_status", ""),
+            "detail": entry.get("detail", ""),
+            "confidence": entry.get("confidence", "uncertain"),
+            "reversing_case": entry.get("reversing_case"),
+        }
+        added += 1
+
+    result = {
+        "cases_checked": total_checked,
+        "flagged": added,
+    }
+    print(json.dumps(result))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Legal research state management")
     parser.add_argument("--state", required=True, help="Path to state JSON file")
@@ -479,6 +538,11 @@ def main():
 
     subparsers.add_parser("resolve-citations")
 
+    p_hist = subparsers.add_parser("add-subsequent-history")
+    p_hist.add_argument("json_file")
+    p_hist.add_argument("--cases-checked", type=int, default=0,
+                        help="Total number of analyzed cases checked")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -498,6 +562,7 @@ def main():
         "mark-explored": cmd_mark_explored,
         "check-diminishing-returns": cmd_check_diminishing_returns,
         "resolve-citations": cmd_resolve_citations,
+        "add-subsequent-history": cmd_add_subsequent_history,
     }
 
     handler = cmd_map[args.command]

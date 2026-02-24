@@ -57,6 +57,11 @@ CSS = """
     .relevance-3 { background: #f39c12; color: white; }
     .relevance-2 { background: #e67e22; color: white; }
     .relevance-1 { background: #e74c3c; color: white; }
+    .history-badge { display: inline-block; padding: 2px 8px; font-size: 0.82em; font-weight: bold; color: white; }
+    .history-reversed, .history-overruled { background: #c0392b; }
+    .history-vacated { background: #e74c3c; }
+    .history-modified, .history-rehearing_granted, .history-superseded { background: #e67e22; }
+    .history-review_pending { background: #f39c12; }
     a { color: #2980b9; text-decoration: none; }
     a:hover { text-decoration: underline; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.92em; }
@@ -130,11 +135,26 @@ def section_warnings(state):
             f'Use <code>/legal-research:research-continue {e(request_id)} '
             f'"&lt;direction&gt;"</code> to expand this research.</p>'
         )
+    has_hist_check = "subsequent_history" in state
+    if has_hist_check:
+        shep_bullet = (
+            '<li><strong>Shepardize all cases.</strong> An automated subsequent-history check was performed '
+            'using CourtListener citation data, but this is not a comprehensive citator review. '
+            'Before relying on any authority, independently confirm it has not been reversed, overruled, '
+            'or otherwise undermined by subsequent decisions.</li>'
+        )
+    else:
+        shep_bullet = (
+            '<li><strong>Shepardize all cases.</strong> Cases cited in this report have not been shepardized. '
+            'Before relying on any authority, confirm it has not been reversed, overruled, '
+            'or otherwise undermined by subsequent decisions.</li>'
+        )
+
     return f"""<div class="warnings" id="warnings">
   <strong>Important Limitations</strong>
   <ul>
     <li><strong>Verify all propositions.</strong> Every statement and characterization of a case's holding, facts, or reasoning should be checked against the full text of the cited authority. AI-generated case summaries may contain errors, omissions, or mischaracterizations.</li>
-    <li><strong>Shepardize all cases.</strong> Cases cited in this report have not been shepardized. Before relying on any authority, confirm it has not been reversed, overruled, or otherwise undermined by subsequent decisions.</li>
+    {shep_bullet}
     <li><strong>Search coverage is limited.</strong> This report searched the CourtListener database, which may not include all relevant authorities. Unreported decisions, recent filings, and cases from some courts may be absent.</li>
     <li><strong>AI limitations.</strong> The AI may misidentify holdings vs. dicta, or draw incorrect connections between cases. All analysis should be independently verified.</li>
   </ul>
@@ -142,13 +162,16 @@ def section_warnings(state):
 </div>"""
 
 
-def section_contents():
-    return """<nav class="contents" id="contents">
+def section_contents(state=None):
+    hist_link = ""
+    if state and state.get("subsequent_history"):
+        hist_link = '\n    <li><a href="#subsequent-history">Subsequent History Flags</a></li>'
+    return f"""<nav class="contents" id="contents">
   <strong>Contents</strong>
   <ol>
     <li><a href="#query">User Query</a></li>
     <li><a href="#short-answer">Short Answer</a></li>
-    <li><a href="#leading-authorities">Leading Authorities</a></li>
+    <li><a href="#leading-authorities">Leading Authorities</a></li>{hist_link}
     <li><a href="#all-results">All Results</a></li>
     <li><a href="#about-search">About this Search</a></li>
   </ol>
@@ -238,10 +261,21 @@ def _render_issues(issues):
     return "\n".join(parts)
 
 
-def render_authority_entry(case):
+def _citation_without_name(bluebook_citation):
+    """Strip leading _CaseName_, prefix from Bluebook citation, returning reporter portion.
+
+    E.g. '_Smith v. Jones_, 500 F.3d 123 (9th Cir. 2020)' → '500 F.3d 123 (9th Cir. 2020)'
+    """
+    m = re.match(r'^_[^_]+_,?\s*', bluebook_citation)
+    if m:
+        return bluebook_citation[m.end():]
+    return bluebook_citation
+
+
+def render_authority_entry(case, history=None):
     """Render a single leading authority entry."""
     name = e(case.get("case_name", ""))
-    cite = e(case.get("bluebook_citation", ""))
+    reporter = e(_citation_without_name(case.get("bluebook_citation", "")))
     rel = case.get("relevance_ranking", 0)
     url = e(case.get("url", ""))
     relevance_summary = e(case.get("relevance_summary", ""))
@@ -250,10 +284,29 @@ def render_authority_entry(case):
     key_excerpts = case.get("key_excerpts", [])
     excerpts_html = _render_excerpts(key_excerpts[:1])
 
-    link_html = f'<a href="{url}">CourtListener</a>' if url else ""
+    if url:
+        name_html = f'<a href="{url}"><em><strong>{name}</strong></em></a>'
+    else:
+        name_html = f'<em><strong>{name}</strong></em>'
 
+    # History badge (only if flagged)
+    history_badge = ""
+    history_warning = ""
+    if history:
+        status = history.get("precedential_status", "")
+        label = status.upper().replace("_", " ")
+        confidence = history.get("confidence", "")
+        detail = e(history.get("detail", ""))
+        conf_note = f" ({confidence} confidence)" if confidence else ""
+        history_badge = f' <span class="history-badge history-{e(status)}">{label}</span>'
+        history_warning = (
+            f'\n  <p style="color: #c0392b; font-weight: bold;">'
+            f'Subsequent History: {detail}{conf_note}</p>'
+        )
+
+    reporter_sep = f", {reporter}" if reporter else ""
     return f"""<div style="margin-bottom: 2em; padding: 1em; border: 1px solid #e0e0e0; background: #fafafa;">
-  <p><em><strong>{name}</strong></em>, {cite} &mdash; {link_html} &mdash; <span class="relevance relevance-{rel}">Relevance: {rel}/5</span></p>
+  <p>{name_html}{reporter_sep} &mdash; <span class="relevance relevance-{rel}">Relevance: {rel}/5</span>{history_badge}</p>{history_warning}
   <p><strong>Why Relevant:</strong> {relevance_summary}</p>
   {issues_html}
   {excerpts_html}
@@ -269,13 +322,64 @@ def section_leading_authorities(state):
     sorted_cases = sorted(analyzed, key=lambda x: x.get("relevance_ranking", 0), reverse=True)
     top_cases = sorted_cases[:10]
 
-    entries_html = "\n".join(render_authority_entry(c) for c in top_cases)
+    hist = state.get("subsequent_history", {})
+    entries_html = "\n".join(
+        render_authority_entry(c, hist.get(str(c.get("cluster_id"))))
+        for c in top_cases
+    )
     return f'<h2 id="leading-authorities">3. Leading Authorities</h2>\n{entries_html}'
+
+
+def section_subsequent_history_flags(state):
+    """Render a table of cases flagged with negative subsequent treatment.
+    Returns empty string if no flags found."""
+    hist = state.get("subsequent_history", {})
+    if not hist:
+        return ""
+
+    # Build a name lookup from analyzed_cases and cases_table
+    name_map = {}
+    for c in state.get("analyzed_cases", []):
+        name_map[str(c.get("cluster_id"))] = c.get("case_name", "Unknown")
+    for c in state.get("cases_table", []):
+        cid_str = str(c.get("cluster_id"))
+        if cid_str not in name_map:
+            name_map[cid_str] = c.get("case_name", "Unknown")
+
+    rows = []
+    for cid_str, entry in hist.items():
+        name = e(name_map.get(cid_str, f"Cluster {cid_str}"))
+        status = entry.get("precedential_status", "")
+        label = status.upper().replace("_", " ")
+        detail = e(entry.get("detail", ""))
+        confidence = e(entry.get("confidence", ""))
+        rows.append(
+            f"<tr>"
+            f"<td><em>{name}</em></td>"
+            f'<td><span class="history-badge history-{e(status)}">{label}</span></td>'
+            f"<td>{detail}</td>"
+            f"<td>{confidence}</td>"
+            f"</tr>"
+        )
+
+    rows_html = "\n".join(rows)
+    return f"""<h2 id="subsequent-history">Subsequent History Flags</h2>
+<p style="font-size: 0.9em; color: #666;"><em>The following cases were flagged by an automated subsequent-history check. This is not a substitute for comprehensive Shepard&#39;s/KeyCite verification.</em></p>
+<table>
+  <thead>
+    <tr><th>Case</th><th>Status</th><th>Detail</th><th>Confidence</th></tr>
+  </thead>
+  <tbody>
+{rows_html}
+  </tbody>
+</table>"""
 
 
 def section_all_results(state):
     cases_table = state.get("cases_table", [])
     analyzed_map = {c.get("cluster_id"): c for c in state.get("analyzed_cases", [])}
+    hist = state.get("subsequent_history", {})
+    has_flags = bool(hist)
 
     # Sort by final score descending
     def sort_key(c):
@@ -292,27 +396,46 @@ def section_all_results(state):
         ac = analyzed_map.get(cid, {})
 
         name = e(c.get("case_name", ""))
-        cite = e(ac.get("bluebook_citation", c.get("bluebook_citation", "")))
+        raw_cite = ac.get("bluebook_citation", c.get("bluebook_citation", ""))
+        reporter = e(_citation_without_name(raw_cite))
+        url = e(c.get("url", ""))
         relevance_note = e(c.get("relevance_note", "") or ac.get("relevance_summary", ""))
         score = c.get("initial_relevance", 0)
+
+        reporter_sep = f", {reporter}" if reporter else ""
+        if url:
+            case_cell = f'<td><a href="{url}"><em>{name}</em>{reporter_sep}</a></td>'
+        else:
+            case_cell = f'<td><em>{name}</em>{reporter_sep}</td>'
+
+        flag_cell = ""
+        if has_flags:
+            h = hist.get(str(cid))
+            if h:
+                status = h.get("precedential_status", "")
+                label = status.upper().replace("_", " ")
+                flag_cell = f'<td><span class="history-badge history-{e(status)}">{label}</span></td>'
+            else:
+                flag_cell = "<td></td>"
 
         rows.append(
             f"<tr>"
             f"<td>{i}</td>"
-            f"<td><em>{name}</em></td>"
-            f"<td>{cite}</td>"
+            f"{case_cell}"
             f"<td>{relevance_note}</td>"
             f'<td><span class="relevance relevance-{score}">{score}/5</span></td>'
+            f"{flag_cell}"
             f"</tr>"
         )
 
     rows_html = "\n".join(rows)
     total = len(cases_table)
+    flags_header = "<th>Flags</th>" if has_flags else ""
     return f"""<h2 id="all-results">4. All Results</h2>
 <table>
   <thead>
     <tr>
-      <th>#</th><th>Case Name</th><th>Citation</th><th>Relevance Note</th><th>Score</th>
+      <th>#</th><th>Case</th><th>Relevance Note</th><th>Score</th>{flags_header}
     </tr>
   </thead>
   <tbody>
@@ -404,10 +527,11 @@ def generate_report(state):
 
     sections = [
         section_warnings(state),
-        section_contents(),
+        section_contents(state),
         section_query(state),
         section_short_answer(state),
         section_leading_authorities(state),
+        section_subsequent_history_flags(state),
         section_all_results(state),
         section_about_search(state),
         section_about_report(state),

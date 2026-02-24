@@ -165,12 +165,64 @@ def cmd_ingest_fetch(state, args):
     }))
 
 
+def cmd_ingest_hist(state, args):
+    """Read check_subsequent_history.py output files and log a structured hist_batch event."""
+    _ensure_session_log(state)
+    sl = state["session_log"]
+    if "started_at" not in sl:
+        sl["started_at"] = _now()
+
+    cases = []
+    for path in args.files:
+        fpath = Path(path)
+        if not fpath.exists():
+            cases.append({"file": str(fpath), "error": "file not found"})
+            continue
+        try:
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+        except Exception as exc:
+            cases.append({"file": str(fpath), "error": f"parse error: {exc}"})
+            continue
+
+        cases.append({
+            "cluster_id": data.get("cluster_id"),
+            "citing_cases_found": data.get("query_stats", {}).get("total_unique", 0),
+            "elapsed_ms": data.get("elapsed_ms"),
+            "retries": data.get("total_retries", 0),
+            "error": data.get("error"),
+        })
+
+    succeeded = sum(1 for c in cases if not c.get("error"))
+    failed = sum(1 for c in cases if c.get("error"))
+    total_citing = sum(c.get("citing_cases_found", 0) for c in cases if not c.get("error"))
+    sl["events"].append({
+        "ts": _now(),
+        "type": "hist_batch",
+        "phase": args.phase,
+        "attempted": len(cases),
+        "succeeded": succeeded,
+        "failed": failed,
+        "total_citing_cases": total_citing,
+        "cases": cases,
+    })
+
+    print(json.dumps({
+        "logged": "hist_batch",
+        "attempted": len(cases),
+        "succeeded": succeeded,
+        "failed": failed,
+        "total_citing_cases": total_citing,
+    }))
+
+
 def _compute_api_performance(events):
     """Aggregate API performance metrics from session events."""
     total_api_ms = 0
     total_retries = 0
     fetch_attempted = 0
     fetch_succeeded = 0
+    hist_attempted = 0
+    hist_succeeded = 0
     search_batches = []
 
     for event in events:
@@ -193,8 +245,15 @@ def _compute_api_performance(events):
                 if c.get("elapsed_ms"):
                     total_api_ms += c["elapsed_ms"]
                 total_retries += c.get("retries", 0)
+        elif etype == "hist_batch":
+            hist_attempted += event.get("attempted", 0)
+            hist_succeeded += event.get("succeeded", 0)
+            for c in event.get("cases", []):
+                if c.get("elapsed_ms"):
+                    total_api_ms += c["elapsed_ms"]
+                total_retries += c.get("retries", 0)
 
-    return {
+    perf = {
         "total_api_ms": total_api_ms if total_api_ms > 0 else None,
         "total_retries": total_retries,
         "fetch_attempted": fetch_attempted,
@@ -204,6 +263,11 @@ def _compute_api_performance(events):
         ),
         "search_batches": search_batches if search_batches else None,
     }
+    if hist_attempted > 0:
+        perf["hist_attempted"] = hist_attempted
+        perf["hist_succeeded"] = hist_succeeded
+
+    return perf
 
 
 def _render_note(n):
@@ -343,6 +407,11 @@ def main():
     p_if.add_argument("--phase", default="", help="Phase label (e.g. 'Phase 3')")
     p_if.add_argument("files", nargs="+", help="Paths to fetch_case_text.py output JSON files")
 
+    p_ih = subparsers.add_parser("ingest-hist", help="Log check_subsequent_history.py output files as a batch event")
+    p_ih.add_argument("--state-file", required=True, help="Path to state JSON file")
+    p_ih.add_argument("--phase", default="", help="Phase label (e.g. 'Phase 4.5')")
+    p_ih.add_argument("files", nargs="+", help="Paths to check_subsequent_history.py output JSON files")
+
     p_sum = subparsers.add_parser("summary", help="Assemble and append session record to JSONL log")
     p_sum.add_argument("--state-file", required=True, help="Path to state JSON file")
     p_sum.add_argument("--log-file", default="./legal-research-sessions.jsonl",
@@ -371,6 +440,9 @@ def main():
         save_state(args.state_file, state)
     elif args.command == "ingest-fetch":
         cmd_ingest_fetch(state, args)
+        save_state(args.state_file, state)
+    elif args.command == "ingest-hist":
+        cmd_ingest_hist(state, args)
         save_state(args.state_file, state)
     elif args.command == "summary":
         cmd_summary(state, args)

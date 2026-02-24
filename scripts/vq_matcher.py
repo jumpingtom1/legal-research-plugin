@@ -81,7 +81,11 @@ def tier2_token_sequence(opinion_tokens, excerpt_text):
 
 
 def tier3_fuzzy_match(opinion_tokens, excerpt_text):
-    """Tier 3: Sliding-window fuzzy match. Returns (best_ratio, best_window_text)."""
+    """Tier 3: Sliding-window fuzzy match. Returns (best_ratio, best_window_text).
+
+    Optimized: reuses a single SequenceMatcher instance (excerpt as seq2) and
+    uses quick_ratio() as a cheap upper-bound pre-filter to skip most windows.
+    """
     cleaned = strip_brackets(excerpt_text)
     excerpt_tokens = tokenize(cleaned)
     if not excerpt_tokens:
@@ -92,11 +96,17 @@ def tier3_fuzzy_match(opinion_tokens, excerpt_text):
     max_window = int(n * 1.2) + 1
     best_ratio = 0.0
     best_window = ""
+    # Reuse one SequenceMatcher with excerpt as seq2 (internal caches reused)
+    sm = difflib.SequenceMatcher(None, "", excerpt_str)
     for window_size in range(min_window, min(max_window + 1, len(opinion_tokens) + 1)):
         for i in range(len(opinion_tokens) - window_size + 1):
             window_tokens = opinion_tokens[i : i + window_size]
             window_str = " ".join(window_tokens)
-            ratio = difflib.SequenceMatcher(None, excerpt_str, window_str).ratio()
+            sm.set_seq1(window_str)
+            # quick_ratio() is an O(n) upper bound — skip if it can't beat best
+            if sm.quick_ratio() <= best_ratio:
+                continue
+            ratio = sm.ratio()
             if ratio > best_ratio:
                 best_ratio = ratio
                 best_window = window_str
@@ -120,7 +130,7 @@ def validate_excerpt(opinion_text, excerpt_text, opinion_length):
     elif best_ratio >= 0.85:
         return {"status": "possible_match", "match_tier": "fuzzy", "similarity": round(best_ratio, 3), "best_match_preview": best_window[:200]}
     else:
-        status = "not_found_truncated" if opinion_length >= 49500 else "not_found"
+        status = "not_found_truncated" if opinion_length >= 299500 else "not_found"
         return {"status": status, "match_tier": "none", "similarity": round(best_ratio, 3), "best_match_preview": best_window[:200]}
 
 

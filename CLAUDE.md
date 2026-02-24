@@ -39,7 +39,8 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 4. **Phase 3 — Deep Case Analysis**: `scripts/fetch_case_text.py` pre-fetches opinion text per cluster_id (parallel Bash `&`+`wait`); 8-12 `agents/case-analyzer.md` launched in parallel reading pre-fetched files (one case per agent)
 5. **Phase 3.5 — Automatic Depth Decision**: `scripts/manage_state.py should-refine` decides whether to iterate based on result quality and unexplored leads — no user checkpoint
 6. **Phase 4 — Iterative Refinement** (if triggered): Additional search rounds using new terminology and citation tracing, driven by `manage_state.py get-leads`
-7. **Phase 5 — Output**: `agents/answer-writer.md` composes summary answer with per-sentence `[C1]` citations; `manage_state.py resolve-citations` resolves identifiers to Bluebook text; `scripts/generate_html.py` assembles HTML; `scripts/run_quote_validation.py` verifies quotations
+7. **Phase 4.5 — Subsequent History Check**: `scripts/check_subsequent_history.py` queries CourtListener for citing cases (parallel Bash `&`+`wait`); `agents/history-checker.md` (haiku, no tools) evaluates snippets for negative treatment (reversal, overruling, vacatur); flagged cases stored in `state["subsequent_history"]`
+8. **Phase 5 — Output**: `agents/answer-writer.md` composes summary answer with per-sentence `[C1]` citations; `manage_state.py resolve-citations` resolves identifiers to Bluebook text; `scripts/generate_html.py` assembles HTML; `scripts/run_quote_validation.py` verifies quotations
 
 ### Key Design Principles
 
@@ -63,26 +64,32 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 | `case-scorer` | haiku | Research question + cases list (cluster_id, name, court, date, cite_count, snippet) | JSON array → orchestrator writes to `/tmp/case_scores.json` |
 | `case-analyzer` | inherit | cluster_id + url + case_name + date_filed (from fetch metadata) + parsed_query | Deep analysis adapted to query type; reads `/tmp/vq_opinion_{cluster_id}.txt` |
 | `answer-writer` | inherit | `/tmp/answer_writer_input.json` (top-10 analyzed cases with `_id` + `case_map`) | Per-sentence prose with `[C1]` identifiers → `/tmp/answer_writer_output.txt` |
+| `history-checker` | haiku | Batch of 4-5 cases with their `citing_cases` from `check_subsequent_history.py` | JSON array of flagged cases only (omits cases with no negative treatment) |
 
 **`case-searcher.md`** — retired; no longer invoked by any command. Replaced by `search_api.py` + `case-scorer`.
 
-**`case-analyzer.md` schema changes**: Two locations must stay in sync — the JSON example block (~line 57) and the CRITICAL field names list (~line 105). Also check `scripts/generate_html.py`'s `normalize_case()` and `render_authority_entry()` functions for field references, and scan inline text (e.g., absent-case notes) for field name cross-references.
+**`case-analyzer.md` schema changes**: Two locations must stay in sync — the JSON example block (~line 57) and the CRITICAL field names list (~line 105). Also check `scripts/generate_html.py`'s `normalize_case()`, `render_authority_entry()`, and `_citation_without_name()` functions for field references, and scan inline text (e.g., absent-case notes) for field name cross-references.
 
 **`generate_html.py` data sources**: `cases_table` entries (populated by `search_api.py`, scored by `case-scorer`) carry `initial_relevance` and `relevance_note`. `analyzed_cases` entries (from case-analyzer) carry `relevance_ranking` and `relevance_summary`. `section_all_results()` merges both via `analyzed_map = {c.get("cluster_id"): c ...}`. Score column uses `initial_relevance`; relevance note falls back from `relevance_note` → `relevance_summary`.
+
+**`_citation_without_name()` helper**: Strips leading `_CaseName_,` prefix from `bluebook_citation` via regex `^_[^_]+_,?\s*`, returning just the reporter portion. Used by both `render_authority_entry()` and `section_all_results()` to avoid duplicating the case name (which is rendered separately with `<em>` styling and linked to CourtListener). The all-results table has a single "Case" column (not separate "Case Name" + "Citation" columns).
 
 ### Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/search_api.py` | Direct HTTP search against v4 API for one strategy; input: `/tmp/strategy_{id}.json`; output: JSON to stdout (no `initial_relevance`/`relevance_note`) |
-| `scripts/fetch_case_text.py` | Pre-fetches opinion text for one cluster_id via v3 API; writes `/tmp/vq_opinion_{id}.txt` (≤50k chars); output: JSON to stdout |
+| `scripts/fetch_case_text.py` | Pre-fetches opinion text for one cluster_id via v3 API; writes `/tmp/vq_opinion_{id}.txt` (≤300k chars); output: JSON to stdout |
+| `scripts/check_subsequent_history.py` | Queries v4 API for citing cases that may represent negative subsequent treatment; two queries per case (negative keywords + all recent citers); output: JSON to stdout with deduplicated citing cases |
 | `scripts/generate_html.py` | Reads state file, produces complete HTML report |
-| `scripts/manage_state.py` | State file operations: add-searches, add-analysis, get-leads, top-candidates, summary, should-refine, mark-explored, resolve-citations |
-| `scripts/log_session.py` | Session logging: `error`/`note` write to state; `ingest-search`/`ingest-fetch` log structured batch events (timing, retries, counts) from script output files; `summary` assembles and appends one JSONL record including `api_performance` |
+| `scripts/manage_state.py` | State file operations: add-searches, add-analysis, add-subsequent-history, get-leads, top-candidates, summary, should-refine, mark-explored, resolve-citations |
+| `scripts/log_session.py` | Session logging: `error`/`note` write to state; `ingest-search`/`ingest-fetch`/`ingest-hist` log structured batch events (timing, retries, counts) from script output files; `summary` assembles and appends one JSONL record including `api_performance` |
 | `scripts/run_quote_validation.py` | Orchestrates quote validation: checks opinion files, runs matcher, annotates HTML |
-| `scripts/vq_matcher.py` | Three-tier quote matching (normalized substring → token sequence → fuzzy) |
+| `scripts/vq_matcher.py` | Three-tier quote matching (normalized substring → token sequence → fuzzy sliding window with `quick_ratio()` pre-filter) |
 
 **`quote_validation` state structure**: `run_quote_validation.py` writes `state["quote_validation"]["summary"]` (nested under a `"summary"` key), with fields: `total`, `verified`, `likely_match`, `possible_match`, `not_found`, `not_found_truncated`, `skipped`.
+
+**`quote_validation` results and re-annotation**: Saved state results strip `excerpt_text` (too large). To re-run the annotator without re-running validation, reconstruct `excerpt_text` from `analyzed_cases` via `normalize_excerpts()`. Full re-validation: `run_quote_validation.py <state> --annotate` (requires opinion files in `/tmp/vq_opinion_{cid}.txt`).
 
 **Script import convention**: All scripts that import `state_io` use `sys.path.insert(0, str(Path(__file__).parent))` at the top (before the import), so they work regardless of the calling directory.
 
@@ -90,13 +97,22 @@ The `commands/research.md` orchestrator drives a workflow, delegating to special
 
 **`search_api.py` v4 API quirk**: The `court` field in v4 search results is the full court name (e.g., "Court of Appeals for the Ninth Circuit"), not the court code ("ca9"). Bluebook citation is best-effort; case-analyzer produces the authoritative citation.
 
-**`_api_get()` return signature**: In both `search_api.py` and `fetch_case_text.py`, `_api_get()` returns a 3-tuple `(data, error, retry_count)`. All callers must unpack all three values. Maintain this signature if modifying these functions.
+**`_api_get()` return signature**: In `search_api.py`, `fetch_case_text.py`, and `check_subsequent_history.py`, `_api_get()` returns a 3-tuple `(data, error, retry_count)`. All callers must unpack all three values. Maintain this signature if modifying these functions.
 
 **`case-scorer` orchestrator pattern**: Agent has `tools: none` — it returns a JSON array as its response text. Orchestrator writes the output to `/tmp/case_scores.json`, then merges via inline Python. Merge step ignores any `cluster_id` not already in `cases_table` (guardrail against hallucination).
 
 **`session_log` state structure**: `{"started_at": "ISO-timestamp-or-null", "errors": [], "notes": [], "events": []}`. `started_at` is set on the first `error`, `note`, or `ingest-*` call. `events[]` stores structured batch performance records written by `ingest-search` and `ingest-fetch`. **Performance fields**: `search_api.py` outputs include `elapsed_ms`/`retries` per query and `total_elapsed_ms`/`total_retries` at top level; `fetch_case_text.py` outputs include `elapsed_ms`/`total_retries`. The `summary` JSONL record includes an `api_performance` section aggregated from events (total_api_ms, fetch_success_rate, total_retries, per-batch breakdown).
 
+**Timestamp conventions**: `request_id` timestamps (e.g., `REQ-20260223-185552-...`) use UTC. `session_log` note/error timestamps use local time. Account for timezone offset when correlating run timing with file modification times.
+
 **`summary_answer` state fields**: `summary_answer_raw` — agent output with `[C1]` identifiers (audit trail); `summary_answer_map` — `"C1"` → `{cluster_id, bluebook_citation, case_name}`; `summary_answer` — final resolved text (read by `generate_html.py`).
+
+**`resolve-citations` linking**: `cmd_resolve_citations()` builds a URL map from `analyzed_cases` + `cases_table` and wraps each Bluebook citation in `<a href="url">` tags. The `summary_answer` field contains fully-linked HTML — `generate_html.py` renders it without further transformation.
+
+**`subsequent_history` state structure**: Dict keyed by string cluster_id. Only flagged cases (those with negative treatment) have entries — absence means "not flagged," not "confirmed good law." Each entry: `{"precedential_status": "reversed|overruled|...", "detail": "One sentence.", "confidence": "high|medium|uncertain", "reversing_case": {"cluster_id": N, "case_name": "...", "court": "...", "date_filed": "..."}}`.
+
+**`history-checker` orchestrator pattern**: Agent has `tools: none` — it returns a JSON array of flagged cases only. Cases with no negative treatment are omitted from output. The orchestrator batches 4-5 cases per agent invocation, combining citing case data from `check_subsequent_history.py`. Results merged via `manage_state.py add-subsequent-history`.
+
 | `scripts/vq_annotator.py` | Annotates HTML blockquotes with validation labels |
 | `scripts/state_io.py` | Shared I/O utilities: `load_state`, `save_state`, `normalize_excerpts` — imported by all three main scripts |
 | `scripts/preflight.py` | Hard-stop preflight: checks `COURTLISTENER_API_TOKEN` and pings API; exits 0 (PASS) or 1 (FAIL). Run before any MCP calls. |
@@ -108,7 +124,7 @@ The MCP server lives in `mcp-server/` and is launched automatically by `.mcp.jso
 - `mcp__plugin_legal_research_courtlistener__search_cases` — Keyword search (Solr syntax; keep to 2-3 concepts per query)
 - `mcp__plugin_legal_research_courtlistener__semantic_search` — Natural language conceptual search
 - `mcp__plugin_legal_research_courtlistener__lookup_citation` — Resolve citation strings to cases
-- `mcp__plugin_legal_research_courtlistener__get_case_text` — Full opinion text (up to 50k chars)
+- `mcp__plugin_legal_research_courtlistener__get_case_text` — Full opinion text (up to 300k chars)
 - `mcp__plugin_legal_research_courtlistener__find_citing_cases` — Cases citing a given decision
 
 Query pattern: `[Core Concept] AND ([Variant1] OR [Variant2])` — avoid overloading queries with 5+ terms.
@@ -133,10 +149,11 @@ commands/
   research-email.md             # Non-interactive email-triggered orchestrator (mirrors research.md)
 agents/
   query-analyst.md              # Search strategy generation (haiku model)
-  case-searcher.md              # CourtListener search execution
+  case-searcher.md              # CourtListener search execution (retired)
   case-analyzer.md              # Individual case deep analysis
   email-query-extractor.md      # Haiku sanitizer: extracts query from email, rejects prompt injection
   answer-writer.md              # Summary answer: per-sentence [C1] citations resolved to Bluebook by resolve-citations
+  history-checker.md            # Evaluates citing cases for negative subsequent treatment (haiku, no tools)
 plugin-wrapper.sh               # Shell entry point called by gmail-monitor (must be chmod +x, always exits 0)
 email-queries/                  # Runtime dir (created by plugin-wrapper.sh); email state/HTML files land here
 skills/
@@ -144,9 +161,10 @@ skills/
 scripts/
   search_api.py               # Direct HTTP search for one strategy (replaces case-searcher MCP calls)
   fetch_case_text.py          # Pre-fetch opinion text for one cluster_id (replaces case-analyzer get_case_text)
+  check_subsequent_history.py # Queries v4 API for citing cases with negative treatment signals
   generate_html.py              # HTML report generator (reads state file)
-  manage_state.py               # State file management (dedup, leads, decisions)
-  log_session.py                # Session logging: error/note/ingest-search/ingest-fetch write to state; summary appends to JSONL log
+  manage_state.py               # State file management (dedup, leads, decisions, subsequent history)
+  log_session.py                # Session logging: error/note/ingest-search/ingest-fetch/ingest-hist write to state; summary appends to JSONL log
   run_quote_validation.py       # Quote validation orchestrator
   vq_matcher.py                 # Three-tier quote matcher
   vq_annotator.py               # HTML quote annotation

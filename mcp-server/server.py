@@ -300,7 +300,7 @@ async def semantic_search(
 async def get_case_text(
     cluster_id: int = 0,
     opinion_id: int = 0,
-    max_characters: int = 50000,
+    max_characters: int = 300000,
     ctx: Context = None,
 ) -> str:
     """Retrieve the full text of a court opinion.
@@ -312,7 +312,7 @@ async def get_case_text(
     Args:
         cluster_id: The cluster ID of the case (from search results).
         opinion_id: The specific opinion ID (if known).
-        max_characters: Maximum characters of opinion text to return (default 50000).
+        max_characters: Maximum characters of opinion text to return (default 300000).
     """
     if cluster_id == 0 and opinion_id == 0:
         return "Error: Provide either cluster_id or opinion_id."
@@ -858,9 +858,9 @@ async def get_recap_document(
         if plain_text:
             lines.append("")
             lines.append("--- DOCUMENT TEXT ---")
-            lines.append(plain_text[:50000])
-            if len(plain_text) > 50000:
-                lines.append("\n[Truncated at 50,000 characters]")
+            lines.append(plain_text[:300000])
+            if len(plain_text) > 300000:
+                lines.append("\n[Truncated at 300,000 characters]")
         else:
             lines.append("\nNo plain text available for this document.")
 
