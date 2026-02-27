@@ -9,6 +9,8 @@ Usage:
 Commands:
   add-searches <json_file>    Merge case-searcher results into state, dedup by cluster_id
   add-analysis <json_file>    Merge case-analyzer result(s) into state
+  add-mcp-cases <json_file>   Add cases from MCP tools (lookup_citation, find_citing_cases)
+  validate-scores             Clamp all relevance scores to valid 1-5 range
   get-leads                   Return unexplored follow-up leads as JSON
   top-candidates <n>          Return top N candidates for deep analysis (not yet analyzed)
   summary                     Return summary counts as JSON
@@ -471,6 +473,102 @@ def cmd_check_diminishing_returns(state, args):
     }))
 
 
+def cmd_add_mcp_cases(state, args):
+    """Add cases discovered via MCP tools (lookup_citation, find_citing_cases) to cases_table.
+
+    Provides a structured pathway for Phase 4 citation tracing results.
+    Cases are added with null initial_relevance (must be scored before analysis).
+    """
+    with open(args.json_file, "r", encoding="utf-8") as f:
+        cases = json.load(f)
+
+    if isinstance(cases, dict):
+        cases = [cases]
+
+    source = args.source
+    round_num = args.round if args.round else len(state.get("iteration_log", [])) + 1
+
+    existing_ids = {c["cluster_id"] for c in state.get("cases_table", [])}
+    new_count = 0
+    skipped_no_id = 0
+
+    for case in cases:
+        cid = case.get("cluster_id")
+        if not cid:
+            skipped_no_id += 1
+            continue
+        if cid in existing_ids:
+            continue
+        entry = {
+            "cluster_id": cid,
+            "case_name": case.get("case_name", ""),
+            "court": case.get("court", ""),
+            "date_filed": case.get("date_filed", ""),
+            "cite_count": case.get("cite_count", 0),
+            "url": case.get("url", case.get("absolute_url", "")),
+            "snippet": case.get("snippet", ""),
+            "source_strategy": source,
+            "initial_relevance": None,
+            "relevance_note": None,
+            "round": round_num,
+        }
+        state.setdefault("cases_table", []).append(entry)
+        existing_ids.add(cid)
+        new_count += 1
+
+    result = {
+        "new_cases_added": new_count,
+        "skipped_no_cluster_id": skipped_no_id,
+        "source": source,
+        "total_cases_in_state": len(state.get("cases_table", [])),
+    }
+    print(json.dumps(result))
+
+
+def cmd_validate_scores(state, args):
+    """Clamp all relevance scores to valid 1-5 range.
+
+    Fixes initial_relevance in cases_table and relevance_ranking in analyzed_cases.
+    Values above 5 are clamped to 5; values below 1 are clamped to 1.
+    Null/None values are left as-is (unscored).
+    """
+    corrections = []
+
+    for case in state.get("cases_table", []):
+        ir = case.get("initial_relevance")
+        if ir is not None and isinstance(ir, (int, float)):
+            clamped = min(5, max(1, int(ir)))
+            if clamped != ir:
+                corrections.append({
+                    "location": "cases_table",
+                    "cluster_id": case.get("cluster_id"),
+                    "field": "initial_relevance",
+                    "was": ir,
+                    "now": clamped,
+                })
+                case["initial_relevance"] = clamped
+
+    for case in state.get("analyzed_cases", []):
+        rr = case.get("relevance_ranking")
+        if rr is not None and isinstance(rr, (int, float)):
+            clamped = min(5, max(1, int(rr)))
+            if clamped != rr:
+                corrections.append({
+                    "location": "analyzed_cases",
+                    "cluster_id": case.get("cluster_id"),
+                    "field": "relevance_ranking",
+                    "was": rr,
+                    "now": clamped,
+                })
+                case["relevance_ranking"] = clamped
+
+    result = {
+        "corrections": len(corrections),
+        "details": corrections,
+    }
+    print(json.dumps(result, indent=2))
+
+
 def cmd_add_subsequent_history(state, args):
     """Store flagged subsequent history results in state.
 
@@ -538,6 +636,14 @@ def main():
 
     subparsers.add_parser("resolve-citations")
 
+    p_mcp = subparsers.add_parser("add-mcp-cases")
+    p_mcp.add_argument("json_file")
+    p_mcp.add_argument("--source", required=True,
+                       help="Source tool: lookup_citation or find_citing_cases")
+    p_mcp.add_argument("--round", type=int, default=0)
+
+    subparsers.add_parser("validate-scores")
+
     p_hist = subparsers.add_parser("add-subsequent-history")
     p_hist.add_argument("json_file")
     p_hist.add_argument("--cases-checked", type=int, default=0,
@@ -562,6 +668,8 @@ def main():
         "mark-explored": cmd_mark_explored,
         "check-diminishing-returns": cmd_check_diminishing_returns,
         "resolve-citations": cmd_resolve_citations,
+        "add-mcp-cases": cmd_add_mcp_cases,
+        "validate-scores": cmd_validate_scores,
         "add-subsequent-history": cmd_add_subsequent_history,
     }
 

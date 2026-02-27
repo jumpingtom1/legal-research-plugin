@@ -189,7 +189,8 @@ state = load_state('research-{request_id}-state.json')
 for case in state.get('cases_table', []):
     cid = case.get('cluster_id')
     if cid in scores:
-        case['initial_relevance'] = scores[cid]['initial_relevance']
+        raw = scores[cid].get('initial_relevance', 3)
+        case['initial_relevance'] = min(5, max(1, int(raw)))
         case['relevance_note'] = scores[cid]['relevance_note']
 save_state('research-{request_id}-state.json', state)
 print('Scores merged:', len(scores))
@@ -219,12 +220,14 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_
 
 Prioritize: highest initial_relevance, highest cite_count, court variety, recency. Log the selection with rationale to the user.
 
-**Pre-fetch opinion text in parallel.** For each selected cluster_id:
+**Pre-fetch opinion text and run subsequent history queries in parallel.** For each selected cluster_id, look up its `court` and `date_filed` from `cases_table`. Launch both `fetch_case_text.py` and `check_subsequent_history.py` for each case in the same `&`/`wait` block:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id_1} > /tmp/fetch_{cluster_id_1}.json &
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cluster_id_1} --court "{court_1}" --date-filed "{date_filed_1}" > /tmp/hist_{cluster_id_1}.json &
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id_2} > /tmp/fetch_{cluster_id_2}.json &
-# (one line per case)
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cluster_id_2} --court "{court_2}" --date-filed "{date_filed_2}" > /tmp/hist_{cluster_id_2}.json &
+# (two lines per case: one fetch, one history)
 wait
 ```
 
@@ -232,12 +235,15 @@ Read each `/tmp/fetch_{cluster_id}.json`:
 - **Success** (`"error": null`): add to `fetch_ok` list with `{cluster_id, case_name, date_filed, absolute_url, truncated}`
 - **Failure** (`"error": "<message>"`): log via `log_session.py` (level `warn`) and skip this case
 
-**Log fetch batch performance:**
+**Log fetch and history batch performance:**
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-fetch \
   --state-file research-{request_id}-state.json --phase "Phase 3" \
   /tmp/fetch_{cluster_id_1}.json [/tmp/fetch_{cluster_id_2}.json ...]
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-hist \
+  --state-file research-{request_id}-state.json --phase "Phase 3" \
+  /tmp/hist_{cluster_id_1}.json [/tmp/hist_{cluster_id_2}.json ...]
 ```
 
 List all `/tmp/fetch_{cluster_id}.json` files from this batch.
@@ -349,6 +355,19 @@ Set `workflow_mode` in the state file (`"deep"` if refining, `"quick"` if skippi
 
 Perform at least one refinement round. This phase uses prior results to drive new searches.
 
+**CRITICAL: Do NOT add cases to the state file via inline Python. All case additions MUST go through `manage_state.py add-searches` (for search_api.py results) or `manage_state.py add-mcp-cases` (for MCP tool results).**
+
+### API Failure Tracking
+
+Maintain a running count of consecutive MCP tool failures during this phase (initialize `mcp_fail_count = 0`). After each MCP tool call (`lookup_citation` or `find_citing_cases`):
+- If the call **succeeded** (returned valid data with a cluster_id): reset `mcp_fail_count = 0`
+- If the call **failed** (returned an error, empty results, or timed out): increment `mcp_fail_count += 1`
+
+**If `mcp_fail_count` reaches 3:**
+1. Log: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{request_id}-state.json --level warn --message "API degradation detected: 3+ consecutive MCP failures in Phase 4" --phase "Phase 4"`
+2. Skip all remaining Phase 4 MCP work (citation tracing, find_citing_cases)
+3. Continue with any search_api.py strategies already planned, then proceed to the partial-result exit check below
+
 ### Step 1: Analyze leads
 
 Run:
@@ -358,21 +377,33 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_
 
 This returns unexplored citation leads and search terms that emerged from analyzed cases but haven't been searched yet.
 
-### Step 2: Generate refined strategies
+### Step 2: Citation tracing via MCP tools
 
-Based on the leads:
-1. For **citation leads**: Use `mcp__plugin_legal_research_courtlistener__lookup_citation` to resolve cited cases. If they return a cluster_id not already in the cases_table, they're candidates for analysis.
-2. For **new terminology**: Generate 2-3 new keyword/semantic queries using terms discovered in the analyzed cases.
-3. For the 2-3 most important analyzed cases (highest relevance), use `mcp__plugin_legal_research_courtlistener__find_citing_cases` to find recent applications.
-4. **If analogous expansion was triggered** (the `should-refine` reason includes "analogous expansion needed"): Launch a second **query-analyst** agent with an explicit instruction: *"The original factual pattern returned few results. Generate 2-3 additional strategies using broader factual framings, analogous party configurations, or the governing legal doctrine for this type of scenario. Tag all strategies as `strategy_type: 'analogous'`."* Incorporate these strategies into the refinement search round.
+**For citation leads** from `get-leads`: Use `mcp__plugin_legal_research_courtlistener__lookup_citation` to resolve each cited case. Collect all successful results (those returning a `cluster_id`) into a JSON array. Write to `/tmp/mcp_cases_round_{N}.json` and run:
 
-### Step 3: Execute searches
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
+  add-mcp-cases /tmp/mcp_cases_round_{N}.json --source lookup_citation --round {N}
+```
+
+**For the 2-3 most important analyzed cases** (highest relevance): Use `mcp__plugin_legal_research_courtlistener__find_citing_cases` to find recent applications. Collect results into a JSON array. Write to `/tmp/mcp_citing_round_{N}.json` and run:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
+  add-mcp-cases /tmp/mcp_citing_round_{N}.json --source find_citing_cases --round {N}
+```
+
+### Step 3: Generate and execute search strategies
+
+**For new terminology**: Generate 2-3 new keyword/semantic queries using terms discovered in the analyzed cases.
+
+**If analogous expansion was triggered** (the `should-refine` reason includes "analogous expansion needed"): Launch a second **query-analyst** agent with an explicit instruction: *"The original factual pattern returned few results. Generate 2-3 additional strategies using broader factual framings, analogous party configurations, or the governing legal doctrine for this type of scenario. Tag all strategies as `strategy_type: 'analogous'`."* Incorporate these strategies into the refinement search round.
 
 Write each refined strategy to `/tmp/strategy_{strategy_id}.json`. Launch all `search_api.py` processes in parallel (same pattern as Phase 2), outputting to `/tmp/search_raw_{strategy_id}.json`. After `wait`, check for errors. For successful results:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json \
-  add-searches /tmp/search_raw_{strategy_id}.json --round 2
+  add-searches /tmp/search_raw_{strategy_id}.json --round {N}
 ```
 
 Log search batch performance (list all output files from this round):
@@ -382,19 +413,38 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-search \
   /tmp/search_raw_{strategy_id}.json [...]
 ```
 
-After merging new cases: identify the **new cluster_ids** (those not yet in `cases_table` before this round). Launch ONE **case-scorer** agent for new cases only, passing the existing analyzed-case names and scores as calibration context. Write output to `/tmp/case_scores.json` and merge into state using the same python snippet as Phase 2.
+After merging new cases: identify the **new cluster_ids** (those not yet scored). Launch ONE **case-scorer** agent for new cases only, passing the existing analyzed-case names and scores as calibration context. Write output to `/tmp/case_scores.json` and merge into state using the same python snippet as Phase 2 (with score clamping).
 
 ### Step 4: Analyze new finds
 
-Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. Pre-fetch opinion text in parallel using `fetch_case_text.py` for each candidate (same pattern as Phase 3). Log fetch batch performance after the `wait`:
+Run `manage_state.py top-candidates 8` to get the best unanalyzed cases. For each candidate, look up its `court` and `date_filed` from `cases_table`. Pre-fetch opinion text and run subsequent history queries in parallel (same pattern as Phase 3):
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/fetch_case_text.py {cluster_id_1} > /tmp/fetch_{cluster_id_1}.json &
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cluster_id_1} --court "{court_1}" --date-filed "{date_filed_1}" > /tmp/hist_{cluster_id_1}.json &
+# (two lines per case: one fetch, one history)
+wait
+```
+
+Log fetch and history batch performance after the `wait`:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-fetch \
   --state-file research-{request_id}-state.json --phase "Phase 4" \
   /tmp/fetch_{cluster_id}.json [...]
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-hist \
+  --state-file research-{request_id}-state.json --phase "Phase 4" \
+  /tmp/hist_{cluster_id}.json [...]
 ```
 Launch **case-analyzer** agents for the top 5-8 cases that fetched successfully. Merge via `manage_state.py add-analysis`.
 
-### Step 5: Check for another round
+### Step 5: Validate scores
+
+After all scoring and analysis in this round, run:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_id}-state.json validate-scores
+```
+
+### Step 6: Check for another round
 
 Run both checks (N = current round number, e.g., 2 for the first refinement round):
 ```
@@ -419,65 +469,85 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_
 
 Log refinement results: new terms discovered, strategy productivity, new cases found and analyzed.
 
+### Partial-Result Exit (API Degradation)
+
+If API degradation was detected during this phase (3+ consecutive MCP failures), check whether enough data exists to produce a useful report:
+
+**If at least 3 analyzed cases with `relevance_ranking >= 3` exist:**
+1. Set `state["partial_results"] = true` in the state file
+2. Log: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py note --state-file research-{request_id}-state.json --message "Research truncated: API degradation, outputting partial results"`
+3. Skip Phase 4.5, proceed directly to Phase 5
+
+**If fewer than 3 analyzed cases with `relevance_ranking >= 3`:**
+1. Log: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py error --state-file research-{request_id}-state.json --level fatal --message "API degradation with insufficient data — cannot produce reliable report" --phase "Phase 4"`
+2. Set `state["partial_results"] = true` in the state file
+3. Still proceed to Phase 5 — the partial results banner will warn the user
+
 Run `/compact` before Phase 4.5.
 
 ---
 
 ## Phase 4.5: Subsequent History Check
 
-This phase checks all analyzed cases for negative subsequent treatment (reversal, overruling, vacatur, etc.) using CourtListener citation data. It runs regardless of whether refinement occurred.
+This phase evaluates all analyzed cases for negative subsequent treatment (reversal, overruling, vacatur, etc.). History API queries were already launched in parallel with fetch operations during Phases 3 and 4. This phase runs any remaining queries for cases not yet checked, then evaluates all results with history-checker agents.
 
-### Step 1: Gather analyzed cases
+### Step 1: Identify unchecked cases
 
-Read the state file to get the list of analyzed cases. For each, extract `cluster_id`, `case_name`, `court` (from `cases_table`), and `date_filed`.
+Read the state file to get the list of analyzed cases. Check which ones already have `/tmp/hist_{cluster_id}.json` files from Phases 3/4. Run any missing history queries:
 
 ```bash
 python3 -c "
-import json
+import json, os
 state = json.load(open('research-{request_id}-state.json'))
 ct_map = {c['cluster_id']: c for c in state.get('cases_table', [])}
+missing = []
 for c in state.get('analyzed_cases', []):
     cid = c['cluster_id']
-    ct = ct_map.get(cid, {})
-    print(json.dumps({'cluster_id': cid, 'case_name': c.get('case_name',''), 'court': ct.get('court',''), 'date_filed': c.get('date_filed','')}))
+    if not os.path.exists(f'/tmp/hist_{cid}.json'):
+        ct = ct_map.get(cid, {})
+        missing.append({'cluster_id': cid, 'case_name': c.get('case_name',''), 'court': ct.get('court',''), 'date_filed': c.get('date_filed','')})
+print(json.dumps(missing))
 "
 ```
 
-### Step 2: Run history queries in parallel
+### Step 2: Run history queries for unchecked cases only
 
-For each analyzed case, launch `check_subsequent_history.py` in parallel:
+If there are unchecked cases, launch `check_subsequent_history.py` for each in parallel:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cid1} --court "{court1}" --date-filed "{date1}" > /tmp/hist_{cid1}.json &
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_subsequent_history.py {cid2} --court "{court2}" --date-filed "{date2}" > /tmp/hist_{cid2}.json &
-# (one line per analyzed case)
+# (one line per unchecked case — most sessions will have 0 here)
 wait
 ```
 
-Read each `/tmp/hist_{cluster_id}.json`:
-- If `"error"` is non-null: log via `log_session.py` (level `warn`, phase "Phase 4.5") and skip.
-- Otherwise: note the count of `citing_cases`.
-
-**Log history batch performance:**
-
+If additional queries were run, log batch performance:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/log_session.py ingest-hist \
   --state-file research-{request_id}-state.json --phase "Phase 4.5" \
   /tmp/hist_{cid1}.json [/tmp/hist_{cid2}.json ...]
 ```
 
-### Step 3: Filter and batch
+If all cases were already checked in Phases 3/4, log a session note: "Phase 4.5: 0 additional history queries needed — all checked during fetch phases"
+
+### Step 3: Gather all history results and filter
+
+Read all `/tmp/hist_{cluster_id}.json` files for every analyzed case:
+- If `"error"` is non-null: log via `log_session.py` (level `warn`, phase "Phase 4.5") and skip.
+- Otherwise: note the count of `citing_cases`.
+
+### Step 4: Filter and batch
 
 - Cases with 0 `citing_cases` → no flag possible, skip (no state entry needed)
 - Cases with 1+ `citing_cases` → batch into groups of 4-5 for agent evaluation
 
-### Step 4: Launch history-checker agents in parallel
+### Step 5: Launch history-checker agents in parallel
 
 For each batch of 4-5 cases that have citing cases, launch one **history-checker** agent (model: haiku, tools: none). Pass the batch as a JSON array where each entry includes `cluster_id`, `case_name`, `court`, `date_filed`, and `citing_cases`.
 
 Write each agent's output to `/tmp/hist_checked_batch_{N}.json`.
 
-### Step 5: Merge flagged results
+### Step 6: Merge flagged results
 
 Combine all agent results (only flagged cases — agents omit cases with no negative treatment) into `/tmp/subsequent_history_all.json` as a single JSON array.
 
@@ -486,7 +556,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/manage_state.py --state research-{request_
   add-subsequent-history /tmp/subsequent_history_all.json --cases-checked {total_analyzed_count}
 ```
 
-### Step 6: Report to user
+### Step 7: Report to user
 
 Display: total cases checked, cases flagged, and for each flagged case: name, status, detail, confidence.
 

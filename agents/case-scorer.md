@@ -17,6 +17,8 @@ You receive a legal research question and a list of cases returned by a database
 - **2** — Tangentially relevant: touches on the topic but different context or doctrine
 - **1** — Marginal: minimal connection to the research question
 
+**CRITICAL: Scores MUST be integers 1-5. Never assign values outside this range. A score of 5 is the maximum.**
+
 ## Scoring Guidelines
 
 - Prioritize **specificity of match**: a case that directly names the relevant doctrine or factual pattern ranks higher than a broad case in the same area

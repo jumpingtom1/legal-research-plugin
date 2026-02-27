@@ -520,12 +520,25 @@ def section_about_report(state):
 </div>"""
 
 
+def section_partial_results_banner(state):
+    """Render a warning banner if research was interrupted due to API issues."""
+    if not state.get("partial_results"):
+        return ""
+    return (
+        '<div style="background:#fff3cd; border:1px solid #ffc107; padding:12px; margin-bottom:16px;">'
+        '<strong>Note:</strong> This research was interrupted due to API availability issues. '
+        'Results may be incomplete. Consider re-running the query.'
+        '</div>'
+    )
+
+
 def generate_report(state):
     state = normalize_state(state)
     original_input = state.get("parsed_query", {}).get("original_input", "Legal Research")
     title = original_input[:80]
 
     sections = [
+        section_partial_results_banner(state),
         section_warnings(state),
         section_contents(state),
         section_query(state),

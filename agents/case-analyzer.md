@@ -84,6 +84,7 @@ Return your analysis as a single JSON object. **Use these EXACT field names — 
     }
   ],
   "relevance_ranking": 5,
+  // relevance_ranking must be an integer from 1 to 5. 5 = directly on point; 1 = marginally relevant. Never exceed 5.
   "relevance_summary": "This case establishes that the three-year limitations period under the CPA begins running on the date of discovery, not the date of injury, resolving a circuit split on the issue.",
   "position": "supports",
   "context_match": "full | partial | absent | n/a",
@@ -114,6 +115,7 @@ Return your analysis as a single JSON object. **Use these EXACT field names — 
 - `bluebook_citation` — NOT `citation`, NOT `cite`
 - `key_excerpts` — NOT `excerpts`, NOT `quotes`. Each element MUST be `{"text": "..."}`, NOT a plain string.
 - `issues_presented` — NOT `holding`, NOT `key_reasoning`, NOT `issues`
+- `relevance_ranking` — **Must be an integer from 1 to 5.** 5 = directly on point; 1 = marginally relevant. Never exceed 5.
 - `relevance_summary` — NOT `summary`, NOT `relevance_description`. A 1-2 sentence plain-language description of this case's substantive contribution to the research question. Describes *what* the case establishes or decides that matters. **If the case pre-dates the pivotal authority that established the controlling rule, state that here and note its limited precedential weight.**
 - `context_match` — **Required.** Evaluate against `required_legal_context` from the parsed_query:
   - `"full"`: the case involves the same party relationship, legal predicate, or applicable test as specified in `required_legal_context`
